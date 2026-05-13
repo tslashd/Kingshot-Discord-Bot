@@ -1,15 +1,19 @@
+"""
+Minister rotation logic. Handles scheduling, swaps, and automatic role assignments.
+"""
 import discord
 from discord import app_commands
 from discord.ext import commands
 import asyncio
 import sqlite3
-import aiohttp
-import hashlib
-from aiohttp_socks import ProxyConnector
-import time
+import logging
 import re
 from datetime import datetime
 import json
+from .pimp_my_bot import theme
+from .login_handler import LoginHandler
+
+logger = logging.getLogger('bot')
 
 try:
     import arabic_reshaper
@@ -18,7 +22,6 @@ try:
 except ImportError:
     ARABIC_SUPPORT = False
 
-SECRET = 'mN4!pQs6JrYwV9'
 
 class ChannelSelectView(discord.ui.View):
     def __init__(self, bot, context: str):
@@ -81,7 +84,7 @@ class ChannelSelect(discord.ui.ChannelSelect):
                                     try:
                                         old_message = await old_channel.fetch_message(message_id)
                                         await old_message.delete()
-                                    except:
+                                    except Exception:
                                         pass  # Message might already be deleted
                             
                             # Remove the message reference so it will be recreated in the new channel
@@ -110,20 +113,20 @@ class ChannelSelect(discord.ui.ChannelSelect):
             if minister_menu_cog and self.context.endswith("channel"):
                 # Return to channel configuration menu with confirmation
                 embed = discord.Embed(
-                    title="📝 Channel Setup",
+                    title=f"{theme.editListIcon} Channel Setup",
                     description=(
-                        f"✅ **{self.context}** set to <#{channel_id}>\n\n"
-                        "Configure channels for minister scheduling:\n\n"
-                        "**Channel Types**\n"
-                        "━━━━━━━━━━━━━━━━━━━━━━\n"
-                        "🔨 **Construction Channel** - Shows available Construction Day slots\n"
-                        "🔬 **Research Channel** - Shows available Research Day slots\n"
-                        "⚔️ **Training Channel** - Shows available Training Day slots\n"
-                        "📄 **Log Channel** - Receives add/remove notifications\n"
-                        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                        "Select a channel type to configure:"
+                        f"{theme.verifiedIcon} **{self.context}** set to <#{channel_id}>\n\n"
+                        f"Configure channels for minister scheduling:\n\n"
+                        f"**Channel Types**\n"
+                        f"{theme.upperDivider}\n"
+                        f"{theme.settingsIcon} **Construction Channel** - Shows available Construction Day slots\n"
+                        f"{theme.searchIcon} **Research Channel** - Shows available Research Day slots\n"
+                        f"{theme.allianceIcon} **Training Channel** - Shows available Training Day slots\n"
+                        f"{theme.documentIcon} **Log Channel** - Receives add/remove notifications\n"
+                        f"{theme.lowerDivider}\n\n"
+                        f"Select a channel type to configure:"
                     ),
-                    color=discord.Color.green()
+                    color=theme.emColor3
                 )
 
                 # Get the ChannelConfigurationView from minister_menu
@@ -141,33 +144,43 @@ class ChannelSelect(discord.ui.ChannelSelect):
             else:
                 # Fallback for other contexts
                 await interaction.response.edit_message(
-                    content=f"✅ `{self.context}` set to <#{channel_id}>.\n\nChannel configured successfully!",
+                    content=f"{theme.verifiedIcon} `{self.context}` set to <#{channel_id}>.\n\nChannel configured successfully!",
                     view=None
                 )
 
         except Exception as e:
             try:
                 await interaction.response.send_message(
-                    f"❌ Failed to update:\n```{e}```",
+                    f"{theme.deniedIcon} Failed to update:\n```{e}```",
                     ephemeral=True
                 )
             except discord.InteractionResponded:
                 await interaction.followup.send(
-                    f"❌ Failed to update:\n```{e}```",
+                    f"{theme.deniedIcon} Failed to update:\n```{e}```",
                     ephemeral=True
                 )
 
 class MinisterSchedule(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.users_conn = sqlite3.connect('db/users.sqlite')
+        self.users_conn = sqlite3.connect('db/users.sqlite', timeout=30.0, check_same_thread=False)
         self.users_cursor = self.users_conn.cursor()
-        self.settings_conn = sqlite3.connect('db/settings.sqlite')
+        self.settings_conn = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
         self.settings_cursor = self.settings_conn.cursor()
-        self.alliance_conn = sqlite3.connect('db/alliance.sqlite')
+        self.alliance_conn = sqlite3.connect('db/alliance.sqlite', timeout=30.0, check_same_thread=False)
         self.alliance_cursor = self.alliance_conn.cursor()
-        self.svs_conn = sqlite3.connect("db/svs.sqlite")
+        self.svs_conn = sqlite3.connect("db/svs.sqlite", timeout=30.0, check_same_thread=False)
         self.svs_cursor = self.svs_conn.cursor()
+
+        # Enable WAL mode for better concurrent access
+        self.users_conn.execute("PRAGMA journal_mode=WAL")
+        self.users_conn.execute("PRAGMA synchronous=NORMAL")
+        self.settings_conn.execute("PRAGMA journal_mode=WAL")
+        self.settings_conn.execute("PRAGMA synchronous=NORMAL")
+        self.alliance_conn.execute("PRAGMA journal_mode=WAL")
+        self.alliance_conn.execute("PRAGMA synchronous=NORMAL")
+        self.svs_conn.execute("PRAGMA journal_mode=WAL")
+        self.svs_conn.execute("PRAGMA synchronous=NORMAL")
 
         self.svs_cursor.execute("""
                     CREATE TABLE IF NOT EXISTS appointments (
@@ -195,23 +208,25 @@ class MinisterSchedule(commands.Cog):
 
         self.svs_conn.commit()
 
-    async def fetch_user_data(self, fid, proxy=None):
-        url = 'https://kingshot-giftcode.centurygame.com/api/player'
-        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-        current_time = int(time.time() * 1000)
-        form = f"fid={fid}&time={current_time}"
-        sign = hashlib.md5((form + SECRET).encode('utf-8')).hexdigest()
-        form = f"sign={sign}&{form}"
-
+    def cog_unload(self):
+        """Close database connections when cog is unloaded."""
         try:
-            connector = ProxyConnector.from_url(proxy) if proxy else None
-            async with aiohttp.ClientSession(connector=connector, trust_env=True) as session:
-                async with session.post(url, headers=headers, data=form, ssl=False) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        return response.status
-        except Exception as e:
+            self.users_conn.close()
+            self.settings_conn.close()
+            self.alliance_conn.close()
+            self.svs_conn.close()
+        except Exception:
+            pass
+
+    async def fetch_user_data(self, fid, proxy=None):
+        result = await LoginHandler().fetch_player_data(str(fid), use_proxy=proxy)
+        if result['status'] == 'success':
+            return {"data": result['data']}
+        elif result['status'] == 'rate_limited':
+            return 429
+        elif result['status'] == 'not_found':
+            return {"data": None}
+        else:
             return None
 
     async def send_embed_to_channel(self, embed):
@@ -316,7 +331,7 @@ class MinisterSchedule(commands.Cog):
             await minister_cog.show_minister_channel_menu(interaction)
         else:
             await interaction.response.send_message(
-                "❌ Minister Menu module not found.",
+                f"{theme.deniedIcon} Minister Menu module not found.",
                 ephemeral=True
             )
 
@@ -738,6 +753,7 @@ class MinisterSchedule(commands.Cog):
                 return None
 
     @discord.app_commands.command(name='minister_add', description='Book an appointment slot for a user.')
+    @app_commands.rename(fid='id')
     @app_commands.autocomplete(appointment_type=appointment_autocomplete, fid=fid_autocomplete, time=time_autocomplete)
     async def minister_add(self, interaction: discord.Interaction, appointment_type: str, fid: str, time: str):
         if not await self.is_admin(interaction.user.id):
@@ -901,7 +917,7 @@ class MinisterSchedule(commands.Cog):
             embed = discord.Embed(
                 title=f"Player added to {appointment_type}",
                 description=f"{nickname} ({fid}) from **{alliance_name}** at {normalized_time}",
-                color=discord.Color.green()
+                color=theme.emColor3
             )
             embed.set_thumbnail(url=avatar_image)
             embed.set_author(name=f"Added by {interaction.user.display_name}", icon_url=interaction.user.avatar.url)
@@ -935,6 +951,7 @@ class MinisterSchedule(commands.Cog):
             await interaction.followup.send(f"An unexpected error occurred while processing the request: {e}")
 
     @discord.app_commands.command(name='minister_remove', description='Cancel an appointment slot for a user.')
+    @app_commands.rename(fid='id')
     @app_commands.autocomplete(appointment_type=appointment_autocomplete, fid=registered_fid_autocomplete)
     async def minister_remove(self, interaction: discord.Interaction, appointment_type: str, fid: str):
         if not await self.is_admin(interaction.user.id):
@@ -1049,7 +1066,7 @@ class MinisterSchedule(commands.Cog):
             embed = discord.Embed(
                 title=f"Player removed from {appointment_type}",
                 description=f"{nickname} ({fid})",
-                color=discord.Color.red()
+                color=theme.emColor2
             )
             embed.set_thumbnail(url=avatar_image)
             embed.set_author(name=f"Removed by {interaction.user.display_name}", icon_url=interaction.user.avatar.url)
@@ -1104,9 +1121,9 @@ class MinisterSchedule(commands.Cog):
         try:
             # Send a confirmation prompt
             embed = discord.Embed(
-                title=f"⚠️ Confirm clearing {appointment_type} list.",
+                title=f"{theme.warnIcon} Confirm clearing {appointment_type} list.",
                 description=f"Are you sure you want to remove all minister appointment slots for: {appointment_type}?\n"
-                            f"**🚨This action cannot be undone and all names will be removed🚨**.\n"
+                            f"**{theme.warnIcon} This action cannot be undone and all names will be removed {theme.warnIcon}**.\n"
                             f"You have 10 seconds to reply with 'Yes' to confirm or 'No' to cancel.",
                 color=discord.Color.orange()
             )
@@ -1175,12 +1192,12 @@ class MinisterSchedule(commands.Cog):
                     embed = discord.Embed(
                         title=f"Cleared {appointment_type} list",
                         description=f"All appointments for {appointment_type} have been successfully removed.",
-                        color=discord.Color.red()
+                        color=theme.emColor2
                     )
                     embed.set_author(name=f"Cleared by {interaction.user.display_name}", icon_url=interaction.user.avatar.url)
 
                     await self.send_embed_to_channel(embed)
-                    await interaction.followup.send(f"✅ Deleted all {appointment_type} appointments.")
+                    await interaction.followup.send(f"{theme.verifiedIcon} Deleted all {appointment_type} appointments.")
                 else:
                     await confirmation_message.reply(f"Cancelled the action. Nothing was removed from {appointment_type}.")
 
@@ -1236,7 +1253,7 @@ class MinisterSchedule(commands.Cog):
                     embed = discord.Embed(
                         title=f"Schedule for {appointment_type}",
                         description=time_list,
-                        color=discord.Color.blue()
+                        color=theme.emColor1
                     )
                     try:
                         await interaction.edit_original_response(embed=embed)
@@ -1261,18 +1278,18 @@ class MinisterSchedule(commands.Cog):
         # Check if user is global admin
         minister_menu_cog = self.bot.get_cog("MinisterMenu")
         if not minister_menu_cog:
-            await interaction.response.send_message("❌ Minister Menu module not found.", ephemeral=True)
+            await interaction.response.send_message(f"{theme.deniedIcon} Minister Menu module not found.", ephemeral=True)
             return
 
         is_admin, is_global_admin, _ = await minister_menu_cog.get_admin_permissions(interaction.user.id)
         if not is_global_admin:
-            await interaction.response.send_message("❌ Only global administrators can save archives.", ephemeral=True)
+            await interaction.response.send_message(f"{theme.deniedIcon} Only global administrators can save archives.", ephemeral=True)
             return
 
         # Get archive cog
         archive_cog = self.bot.get_cog("MinisterArchive")
         if not archive_cog:
-            await interaction.response.send_message("❌ Minister Archive module not found.", ephemeral=True)
+            await interaction.response.send_message(f"{theme.deniedIcon} Minister Archive module not found.", ephemeral=True)
             return
 
         # Generate name if not provided
@@ -1287,18 +1304,18 @@ class MinisterSchedule(commands.Cog):
         # Check if user is global admin
         minister_menu_cog = self.bot.get_cog("MinisterMenu")
         if not minister_menu_cog:
-            await interaction.response.send_message("❌ Minister Menu module not found.", ephemeral=True)
+            await interaction.response.send_message(f"{theme.deniedIcon} Minister Menu module not found.", ephemeral=True)
             return
 
         is_admin, is_global_admin, _ = await minister_menu_cog.get_admin_permissions(interaction.user.id)
         if not is_global_admin:
-            await interaction.response.send_message("❌ Only global administrators can view archives.", ephemeral=True)
+            await interaction.response.send_message(f"{theme.deniedIcon} Only global administrators can view archives.", ephemeral=True)
             return
 
         # Get archive cog
         archive_cog = self.bot.get_cog("MinisterArchive")
         if not archive_cog:
-            await interaction.response.send_message("❌ Minister Archive module not found.", ephemeral=True)
+            await interaction.response.send_message(f"{theme.deniedIcon} Minister Archive module not found.", ephemeral=True)
             return
 
         # Show archive list
@@ -1348,18 +1365,18 @@ class MinisterSchedule(commands.Cog):
         # Check if user is global admin
         minister_menu_cog = self.bot.get_cog("MinisterMenu")
         if not minister_menu_cog:
-            await interaction.response.send_message("❌ Minister Menu module not found.", ephemeral=True)
+            await interaction.response.send_message(f"{theme.deniedIcon} Minister Menu module not found.", ephemeral=True)
             return
 
         is_admin, is_global_admin, _ = await minister_menu_cog.get_admin_permissions(interaction.user.id)
         if not is_global_admin:
-            await interaction.response.send_message("❌ Only global administrators can view change history.", ephemeral=True)
+            await interaction.response.send_message(f"{theme.deniedIcon} Only global administrators can view change history.", ephemeral=True)
             return
 
         # Get archive cog
         archive_cog = self.bot.get_cog("MinisterArchive")
         if not archive_cog:
-            await interaction.response.send_message("❌ Minister Archive module not found.", ephemeral=True)
+            await interaction.response.send_message(f"{theme.deniedIcon} Minister Archive module not found.", ephemeral=True)
             return
 
         # Build query based on filters

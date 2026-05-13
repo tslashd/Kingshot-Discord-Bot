@@ -1,16 +1,24 @@
+"""
+Notification templates. Provides reusable event presets for quick setup.
+"""
 import discord
 from discord.ext import commands
 import sqlite3
 import json
 import os
+import logging
 from typing import Optional, Dict, List
 
 # Import event type configuration
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
-from bear_event_types import EVENT_CONFIG, get_event_types, get_event_icon, get_event_config
+from notification_event_types import EVENT_CONFIG, get_event_types, get_event_icon, get_event_config
+from .pimp_my_bot import theme
+from .permission_handler import PermissionManager
 
-class BearTrapTemplates(commands.Cog):
+logger = logging.getLogger('notification')
+
+class NotificationTemplates(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db_path = 'db/beartime.sqlite'
@@ -46,16 +54,37 @@ class BearTrapTemplates(commands.Cog):
         """)
         self.conn.commit()
 
+        # Migrate: Add mention_message, footer, and author columns if they don't exist
+        self._migrate_add_embed_text_fields()
+
         # Populate pre-built templates if none exist
         self.cursor.execute("SELECT COUNT(*) FROM notification_templates WHERE is_global = 1")
         if self.cursor.fetchone()[0] == 0:
             self._populate_default_templates()
 
-        # Always sync non-customized templates with latest defaults from bear_event_types.py
+        # Always sync non-customized templates with latest defaults from notification_event_types.py
         self._sync_default_templates()
 
+    def cog_unload(self):
+        """Close database connections when cog is unloaded."""
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+
+    def _migrate_add_embed_text_fields(self):
+        """Add mention_message, footer, and author columns if they don't exist"""
+        self.cursor.execute("PRAGMA table_info(notification_templates)")
+        columns = [column[1] for column in self.cursor.fetchall()]
+
+        if 'mention_message' not in columns:
+            self.cursor.execute("ALTER TABLE notification_templates ADD COLUMN mention_message TEXT")
+            self.cursor.execute("ALTER TABLE notification_templates ADD COLUMN footer TEXT")
+            self.cursor.execute("ALTER TABLE notification_templates ADD COLUMN author TEXT")
+            self.conn.commit()
+
     def _sync_default_templates(self):
-        """Sync non-customized templates with latest values from bear_event_types.py"""
+        """Sync non-customized templates with latest values from notification_event_types.py"""
         # First, handle any renamed events (old_name -> new_name)
         renamed_events = {
             "Caesares Fury Bosses": "Caesares Fury",
@@ -101,8 +130,13 @@ class BearTrapTemplates(commands.Cog):
             notification_type = config.get("default_notification_type", 1)
             embed_desc = description
 
-            # Create embed title
-            embed_title = f"%i %n"
+            # Create embed title - only include time if event has variable times
+            has_variable_times = (
+                config.get("available_times") or  # Multiple time slots to choose from
+                config.get("time_slots") or       # Custom scheduling (like Bear Trap)
+                config.get("instances_per_cycle", 0) > 1
+            )
+            embed_title = f"%i %e %n" if has_variable_times else f"%i %n"
 
             # Repeat configuration based on event schedule type
             repeat_config = {}
@@ -164,15 +198,10 @@ class BearTrapTemplates(commands.Cog):
 
     async def check_admin(self, interaction: discord.Interaction) -> bool:
         """Check if user is an admin"""
-        conn = sqlite3.connect('db/settings.sqlite')
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM admin WHERE id = ?", (interaction.user.id,))
-        is_admin = cursor.fetchone() is not None
-        conn.close()
-
+        is_admin, _ = PermissionManager.is_admin(interaction.user.id)
         if not is_admin:
             await interaction.response.send_message(
-                "❌ You don't have permission to use this command!",
+                f"{theme.deniedIcon} You don't have permission to use this command!",
                 ephemeral=True
             )
         return is_admin
@@ -182,7 +211,8 @@ class BearTrapTemplates(commands.Cog):
         self.cursor.execute("""
             SELECT template_id, template_name, event_type, description, notification_type,
                    default_times, embed_title, embed_description, embed_color,
-                   embed_image_url, embed_thumbnail_url, repeat_config, is_global, created_by
+                   embed_image_url, embed_thumbnail_url, repeat_config, is_global, created_by,
+                   mention_message, footer, author
             FROM notification_templates
             WHERE template_id = ?
         """, (template_id,))
@@ -205,22 +235,28 @@ class BearTrapTemplates(commands.Cog):
             "embed_thumbnail_url": row[10],
             "repeat_config": row[11],
             "is_global": row[12],
-            "created_by": row[13]
+            "created_by": row[13],
+            "mention_message": row[14],
+            "footer": row[15],
+            "author": row[16]
         }
 
     def update_template(self, template_id: int, embed_title: str, embed_description: str,
-                       embed_image_url: str, embed_thumbnail_url: str, user_id: int = None):
+                       embed_image_url: str, embed_thumbnail_url: str, mention_message: str = None,
+                       footer: str = None, author: str = None, user_id: int = None):
         """Update a template's embed settings"""
         self.cursor.execute("""
             UPDATE notification_templates
             SET embed_title = ?, embed_description = ?, embed_image_url = ?, embed_thumbnail_url = ?,
+                mention_message = ?, footer = ?, author = ?,
                 is_global = 0, created_by = COALESCE(created_by, ?)
             WHERE template_id = ?
-        """, (embed_title, embed_description, embed_image_url, embed_thumbnail_url, user_id, template_id))
+        """, (embed_title, embed_description, embed_image_url, embed_thumbnail_url,
+              mention_message, footer, author, user_id, template_id))
         self.conn.commit()
 
     def reset_template_to_default(self, template_id: int, event_type: str) -> bool:
-        """Reset a template to its default values from bear_event_types.py"""
+        """Reset a template to its default values from notification_event_types.py"""
         config = EVENT_CONFIG.get(event_type)
 
         # If not found, try to find a matching event by partial name match
@@ -238,12 +274,21 @@ class BearTrapTemplates(commands.Cog):
         thumbnail_url = config.get("thumbnail_url", "")
         description = config.get("description", "")
 
+        # Determine title format based on event type
+        has_variable_times = (
+            config.get("available_times") or
+            config.get("time_slots") or
+            config.get("instances_per_cycle", 0) > 1
+        )
+        embed_title = "%i %e %n" if has_variable_times else "%i %n"
+
         self.cursor.execute("""
             UPDATE notification_templates
             SET embed_image_url = ?, embed_thumbnail_url = ?, embed_description = ?,
-                embed_title = '%i %n', is_global = 1, event_type = ?, template_name = ?
+                embed_title = ?, mention_message = NULL, footer = NULL, author = NULL,
+                is_global = 1, event_type = ?, template_name = ?
             WHERE template_id = ?
-        """, (image_url, thumbnail_url, description, event_type, event_type, template_id))
+        """, (image_url, thumbnail_url, description, embed_title, event_type, event_type, template_id))
         self.conn.commit()
         return True
 
@@ -287,7 +332,7 @@ class BearTrapTemplates(commands.Cog):
         templates = self.get_templates_by_event_type()
         if not templates:
             await interaction.response.send_message(
-                "❌ No templates found.",
+                f"{theme.deniedIcon} No templates found.",
                 ephemeral=True
             )
             return
@@ -295,8 +340,8 @@ class BearTrapTemplates(commands.Cog):
         await view.show_page(interaction, 0, ephemeral=True)
 
 class TemplateBrowseView(discord.ui.View):
-    def __init__(self, cog: BearTrapTemplates, templates: List[Dict], event_filter: Optional[str] = None):
-        super().__init__(timeout=300)
+    def __init__(self, cog: NotificationTemplates, templates: List[Dict], event_filter: Optional[str] = None):
+        super().__init__(timeout=7200)
         self.cog = cog
         self.templates = templates
         self.event_filter = event_filter
@@ -310,14 +355,14 @@ class TemplateBrowseView(discord.ui.View):
         start = page * self.page_size
         end = min(start + self.page_size, len(self.templates))
         page_templates = self.templates[start:end]
-        title = "📚 Available Templates"
+        title = f"{theme.documentIcon} Available Templates"
         if self.event_filter:
             icon = get_event_icon(self.event_filter)
             title = f"{icon} {self.event_filter} Templates"
         embed = discord.Embed(
             title=title,
             description=f"Templates define the default notification settings used by the Setup Wizard. Edit them to customize how the event notifications appear when you create them using the wizard.\n\nShowing {start + 1}-{end} of {len(self.templates)} templates",
-            color=discord.Color.blue()
+            color=theme.emColor1
         )
         for template in page_templates:
             icon = get_event_icon(template["event_type"])
@@ -339,7 +384,7 @@ class TemplateBrowseView(discord.ui.View):
         if self.total_pages > 1:
             prev_button = discord.ui.Button(
                 label="Previous",
-                emoji="⬅️",
+                emoji=f"{theme.backIcon}",
                 style=discord.ButtonStyle.secondary,
                 disabled=(page == 0),
                 row=1
@@ -355,7 +400,7 @@ class TemplateBrowseView(discord.ui.View):
             self.add_item(page_indicator)
             next_button = discord.ui.Button(
                 label="Next",
-                emoji="➡️",
+                emoji=f"{theme.forwardIcon}",
                 style=discord.ButtonStyle.secondary,
                 disabled=(page >= self.total_pages - 1),
                 row=1
@@ -370,7 +415,7 @@ class TemplateBrowseView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=self)
 
 class TemplateSelectDropdown(discord.ui.Select):
-    def __init__(self, cog: BearTrapTemplates, templates: List[Dict]):
+    def __init__(self, cog: NotificationTemplates, templates: List[Dict]):
         self.cog = cog
         self.templates = templates
 
@@ -395,7 +440,7 @@ class TemplateSelectDropdown(discord.ui.Select):
 
         if not template:
             await interaction.response.send_message(
-                "❌ Template not found.",
+                f"{theme.deniedIcon} Template not found.",
                 ephemeral=True
             )
             return
@@ -404,7 +449,7 @@ class TemplateSelectDropdown(discord.ui.Select):
         await view.show_preview(interaction)
 
 class TemplateEditModal(discord.ui.Modal, title="Edit Template"):
-    def __init__(self, cog: BearTrapTemplates, template: Dict):
+    def __init__(self, cog: NotificationTemplates, template: Dict):
         super().__init__()
         self.cog = cog
         self.template = template
@@ -447,6 +492,16 @@ class TemplateEditModal(discord.ui.Modal, title="Edit Template"):
         )
         self.add_item(self.thumbnail_url_input)
 
+        self.mention_message_input = discord.ui.TextInput(
+            label="Mention Message (Optional)",
+            placeholder="Use {tag} for mention, %t for time, %n for name, %e for event time",
+            default=template.get("mention_message", ""),
+            style=discord.TextStyle.paragraph,
+            max_length=2000,
+            required=False
+        )
+        self.add_item(self.mention_message_input)
+
     async def on_submit(self, interaction: discord.Interaction):
         """Handle template update"""
         try:
@@ -456,6 +511,9 @@ class TemplateEditModal(discord.ui.Modal, title="Edit Template"):
                 self.description_input.value,
                 self.image_url_input.value or None,
                 self.thumbnail_url_input.value or None,
+                self.mention_message_input.value or None,
+                None,  # footer - not in UI yet, future use
+                None,  # author - not in UI yet, future use
                 interaction.user.id
             )
 
@@ -467,19 +525,20 @@ class TemplateEditModal(discord.ui.Modal, title="Edit Template"):
                 await view.show_preview(interaction)
             else:
                 await interaction.response.send_message(
-                    "❌ Failed to refresh template preview",
+                    f"{theme.deniedIcon} Failed to refresh template preview",
                     ephemeral=True
                 )
         except Exception as e:
+            logger.error(f"Error updating template: {e}")
             print(f"Error updating template: {e}")
             await interaction.response.send_message(
-                f"❌ Failed to update template: {str(e)}",
+                f"{theme.deniedIcon} Failed to update template: {str(e)}",
                 ephemeral=True
             )
 
 class TemplatePreviewView(discord.ui.View):
-    def __init__(self, cog: BearTrapTemplates, template: Dict, all_templates: List[Dict] = None):
-        super().__init__(timeout=300)
+    def __init__(self, cog: NotificationTemplates, template: Dict, all_templates: List[Dict] = None):
+        super().__init__(timeout=7200)
         self.cog = cog
         self.template = template
         self.all_templates = all_templates or []
@@ -494,7 +553,7 @@ class TemplatePreviewView(discord.ui.View):
         info_embed = discord.Embed(
             title=f"{icon} Template Preview: {template['template_name']}",
             description=template["description"],
-            color=discord.Color.green()
+            color=theme.emColor3
         )
 
         info_embed.add_field(
@@ -543,7 +602,7 @@ class TemplatePreviewView(discord.ui.View):
                         value="Custom",
                         inline=True
                     )
-            except:
+            except Exception:
                 pass
 
         info_embed.add_field(
@@ -559,20 +618,19 @@ class TemplatePreviewView(discord.ui.View):
         sample_date = "Nov 29"
         sample_countdown = "10 minutes"
 
-        # Replace placeholder variables with sample values for preview
-        preview_title = template["embed_title"] or "Notification"
-        preview_title = preview_title.replace("%i", sample_emoji)
-        preview_title = preview_title.replace("%n", template["event_type"])
-        preview_title = preview_title.replace("%e", sample_time)
-        preview_title = preview_title.replace("%d", sample_date)
-        preview_title = preview_title.replace("%t", sample_countdown)
+        def replace_placeholders(text):
+            if not text:
+                return text
+            return (text.replace("%i", sample_emoji)
+                       .replace("%n", template["event_type"])
+                       .replace("%e", sample_time)
+                       .replace("%d", sample_date)
+                       .replace("%t", sample_countdown)
+                       .replace("{tag}", "@Role")
+                       .replace("@tag", "@Role"))
 
-        preview_desc = template["embed_description"] or "No description"
-        preview_desc = preview_desc.replace("%i", sample_emoji)
-        preview_desc = preview_desc.replace("%n", template["event_type"])
-        preview_desc = preview_desc.replace("%e", sample_time)
-        preview_desc = preview_desc.replace("%d", sample_date)
-        preview_desc = preview_desc.replace("%t", sample_countdown)
+        preview_title = replace_placeholders(template["embed_title"] or "Notification")
+        preview_desc = replace_placeholders(template["embed_description"] or "No description")
 
         notification_embed = discord.Embed(
             title=preview_title,
@@ -586,10 +644,23 @@ class TemplatePreviewView(discord.ui.View):
         if template["embed_thumbnail_url"]:
             notification_embed.set_thumbnail(url=template["embed_thumbnail_url"])
 
+        if template.get("footer"):
+            notification_embed.set_footer(text=replace_placeholders(template["footer"]))
+
+        if template.get("author"):
+            notification_embed.set_author(name=replace_placeholders(template["author"]))
+
+        if template.get("mention_message"):
+            info_embed.add_field(
+                name="Mention Message",
+                value=f"`{replace_placeholders(template['mention_message'])}`",
+                inline=False
+            )
+
         # Add edit button
         edit_button = discord.ui.Button(
             label="Edit Template",
-            emoji="✏️",
+            emoji=f"{theme.editListIcon}",
             style=discord.ButtonStyle.primary
         )
         edit_button.callback = self.edit_template
@@ -599,7 +670,7 @@ class TemplatePreviewView(discord.ui.View):
         if template.get("is_global") == 0:
             reset_button = discord.ui.Button(
                 label="Reset to Default",
-                emoji="🔄",
+                emoji=f"{theme.refreshIcon}",
                 style=discord.ButtonStyle.danger
             )
             reset_button.callback = self.reset_to_default
@@ -608,7 +679,7 @@ class TemplatePreviewView(discord.ui.View):
         # Add back button
         back_button = discord.ui.Button(
             label="Back",
-            emoji="◀️",
+            emoji=f"{theme.prevIcon}",
             style=discord.ButtonStyle.secondary
         )
         back_button.callback = self.back_to_browse
@@ -625,7 +696,7 @@ class TemplatePreviewView(discord.ui.View):
         """Show reset confirmation"""
         confirm_view = ResetConfirmView(self.cog, self.template, self.all_templates)
         await interaction.response.send_message(
-            "⚠️ **Reset Template to Default?**\n\n"
+            f"{theme.warnIcon} **Reset Template to Default?**\n\n"
             "This will restore the original image, thumbnail, title, and description from the system defaults.\n\n"
             "Any customizations you made will be lost.",
             view=confirm_view,
@@ -642,7 +713,7 @@ class TemplatePreviewView(discord.ui.View):
 class ResetConfirmView(discord.ui.View):
     """Confirmation view for resetting a template to default"""
 
-    def __init__(self, cog: BearTrapTemplates, template: Dict, all_templates: List[Dict] = None):
+    def __init__(self, cog: NotificationTemplates, template: Dict, all_templates: List[Dict] = None):
         super().__init__(timeout=60)
         self.cog = cog
         self.template = template
@@ -656,12 +727,12 @@ class ResetConfirmView(discord.ui.View):
         )
         if success:
             await interaction.response.edit_message(
-                content="✅ Template has been reset to default values.",
+                content=f"{theme.verifiedIcon} Template has been reset to default values.",
                 view=None
             )
         else:
             await interaction.response.edit_message(
-                content="❌ Could not find default values for this event type.",
+                content=f"{theme.deniedIcon} Could not find default values for this event type.",
                 view=None
             )
         self.stop()
@@ -675,4 +746,4 @@ class ResetConfirmView(discord.ui.View):
         self.stop()
 
 async def setup(bot):
-    await bot.add_cog(BearTrapTemplates(bot))
+    await bot.add_cog(NotificationTemplates(bot))

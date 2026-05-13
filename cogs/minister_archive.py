@@ -1,8 +1,15 @@
+"""
+Minister archive. Stores and displays historical minister appointment data.
+"""
 import discord
 from discord.ext import commands
 import sqlite3
+import logging
 from datetime import datetime
 import json
+from .pimp_my_bot import theme, safe_edit_message
+
+logger = logging.getLogger('bot')
 
 class ArchiveDetailsView(discord.ui.View):
     def __init__(self, bot, cog, archive_id, archive_info, type_counts):
@@ -13,27 +20,27 @@ class ArchiveDetailsView(discord.ui.View):
         self.archive_info = archive_info
         self.type_counts = type_counts  # List of (appointment_type, count) tuples
 
-    @discord.ui.button(label="View Construction", style=discord.ButtonStyle.primary, emoji="🔨", row=0)
+    @discord.ui.button(label="View Construction", style=discord.ButtonStyle.primary, emoji=f"{theme.constructionIcon}", row=0)
     async def view_construction(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_archive_appointments(interaction, self.archive_id, "Construction Day")
 
-    @discord.ui.button(label="View Research", style=discord.ButtonStyle.primary, emoji="🔬", row=0)
+    @discord.ui.button(label="View Research", style=discord.ButtonStyle.primary, emoji=f"{theme.researchIcon}", row=0)
     async def view_research(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_archive_appointments(interaction, self.archive_id, "Research Day")
 
-    @discord.ui.button(label="View Training", style=discord.ButtonStyle.primary, emoji="⚔️", row=0)
+    @discord.ui.button(label="View Training", style=discord.ButtonStyle.primary, emoji=f"{theme.trainingIcon}", row=0)
     async def view_training(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_archive_appointments(interaction, self.archive_id, "Troops Training Day")
 
-    @discord.ui.button(label="View Change History", style=discord.ButtonStyle.secondary, emoji="📜", row=1)
+    @discord.ui.button(label="View Change History", style=discord.ButtonStyle.secondary, emoji=f"{theme.documentIcon}", row=1)
     async def view_history(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_archive_change_history(interaction, self.archive_id)
 
-    @discord.ui.button(label="Delete Archive", style=discord.ButtonStyle.danger, emoji="🗑️", row=1)
+    @discord.ui.button(label="Delete Archive", style=discord.ButtonStyle.danger, emoji=f"{theme.trashIcon}", row=1)
     async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_delete_archive_confirmation(interaction, self.archive_id, self.archive_info)
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=2)
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{theme.backIcon}", row=2)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_archive_list(interaction)
 
@@ -56,7 +63,7 @@ class ArchiveAppointmentsView(discord.ui.View):
         # Pagination buttons
         if self.max_page > 0:
             prev_button = discord.ui.Button(
-                label="◀️",
+                label="", emoji=f"{theme.prevIcon}",
                 style=discord.ButtonStyle.secondary,
                 disabled=self.page == 0,
                 row=0
@@ -65,7 +72,7 @@ class ArchiveAppointmentsView(discord.ui.View):
             self.add_item(prev_button)
 
             next_button = discord.ui.Button(
-                label="▶️",
+                label="", emoji=f"{theme.nextIcon}",
                 style=discord.ButtonStyle.secondary,
                 disabled=self.page >= self.max_page,
                 row=0
@@ -77,7 +84,7 @@ class ArchiveAppointmentsView(discord.ui.View):
         post_button = discord.ui.Button(
             label="Post to Channel",
             style=discord.ButtonStyle.success,
-            emoji="📤",
+            emoji=f"{theme.exportIcon}",
             row=1 if self.max_page > 0 else 0
         )
         post_button.callback = self.post_to_channel_callback
@@ -87,7 +94,7 @@ class ArchiveAppointmentsView(discord.ui.View):
         back_button = discord.ui.Button(
             label="Back",
             style=discord.ButtonStyle.primary,
-            emoji="⬅️",
+            emoji=f"{theme.backIcon}",
             row=1 if self.max_page > 0 else 0
         )
         back_button.callback = self.back_button_callback
@@ -151,7 +158,7 @@ class ArchiveListView(discord.ui.View):
         # Pagination buttons
         if self.max_page > 0:
             prev_button = discord.ui.Button(
-                label="◀️",
+                label="", emoji=f"{theme.prevIcon}",
                 style=discord.ButtonStyle.secondary,
                 disabled=self.page == 0,
                 row=1
@@ -160,7 +167,7 @@ class ArchiveListView(discord.ui.View):
             self.add_item(prev_button)
 
             next_button = discord.ui.Button(
-                label="▶️",
+                label="", emoji=f"{theme.nextIcon}",
                 style=discord.ButtonStyle.secondary,
                 disabled=self.page >= self.max_page,
                 row=1
@@ -172,7 +179,7 @@ class ArchiveListView(discord.ui.View):
         back_button = discord.ui.Button(
             label="Back",
             style=discord.ButtonStyle.primary,
-            emoji="⬅️",
+            emoji=f"{theme.backIcon}",
             row=2 if self.max_page > 0 else 1
         )
         back_button.callback = self.back_button_callback
@@ -202,15 +209,15 @@ class ClearAfterSaveView(discord.ui.View):
         self.cog = cog
         self.archive_id = archive_id
 
-    @discord.ui.button(label="Yes, Clear All", style=discord.ButtonStyle.danger, emoji="🗑️")
+    @discord.ui.button(label="Yes, Clear All", style=discord.ButtonStyle.danger, emoji=f"{theme.trashIcon}")
     async def yes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.clear_all_after_archive(interaction, self.archive_id)
 
-    @discord.ui.button(label="No, Keep Appointments", style=discord.ButtonStyle.secondary, emoji="❌")
+    @discord.ui.button(label="No, Keep Appointments", style=discord.ButtonStyle.secondary, emoji=f"{theme.deniedIcon}")
     async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_archive_menu(interaction)
 
-    @discord.ui.button(label="Back to Main Menu", style=discord.ButtonStyle.primary, emoji="⬅️")
+    @discord.ui.button(label="Back to Main Menu", style=discord.ButtonStyle.primary, emoji=f"{theme.backIcon}")
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         minister_menu_cog = self.bot.get_cog("MinisterMenu")
         if minister_menu_cog:
@@ -224,11 +231,11 @@ class DeleteArchiveConfirmView(discord.ui.View):
         self.archive_id = archive_id
         self.archive_info = archive_info
 
-    @discord.ui.button(label="Confirm Delete", style=discord.ButtonStyle.danger, emoji="⚠️")
+    @discord.ui.button(label="Confirm Delete", style=discord.ButtonStyle.danger, emoji=f"{theme.warnIcon}")
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.delete_archive(interaction, self.archive_id)
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji=f"{theme.deniedIcon}")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_archive_details(interaction, self.archive_id)
 
@@ -250,7 +257,7 @@ class PostArchiveChannelSelect(discord.ui.ChannelSelect):
         # Fetch the actual channel object from the guild
         channel = interaction.guild.get_channel(selected_channel.id)
         if not channel:
-            await interaction.response.send_message("❌ Could not access the selected channel.", ephemeral=True)
+            await interaction.response.send_message(f"{theme.deniedIcon} Could not access the selected channel.", ephemeral=True)
             return
         await self.cog.post_archive_to_channel(interaction, channel, self.archive_id, self.appointment_type, self.appointments)
 
@@ -266,7 +273,7 @@ class PostArchiveChannelView(discord.ui.View):
         # Add channel select
         self.add_item(PostArchiveChannelSelect(cog, archive_id, appointment_type, appointments))
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=1)
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{theme.backIcon}", row=1)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_archive_appointments(interaction, self.archive_id, self.appointment_type)
 
@@ -300,20 +307,20 @@ class ArchiveMenuView(discord.ui.View):
         self.bot = bot
         self.cog = cog
 
-    @discord.ui.button(label="Save Current Schedule", style=discord.ButtonStyle.success, emoji="💾")
+    @discord.ui.button(label="Save Current Schedule", style=discord.ButtonStyle.success, emoji=f"{theme.saveIcon}")
     async def save_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = SaveArchiveModal(self.cog)
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="View Archives", style=discord.ButtonStyle.primary, emoji="📚")
+    @discord.ui.button(label="View Archives", style=discord.ButtonStyle.primary, emoji=f"{theme.archiveIcon}")
     async def view_archives(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_archive_list(interaction)
 
-    @discord.ui.button(label="Current Change History", style=discord.ButtonStyle.primary, emoji="📜")
+    @discord.ui.button(label="Current Change History", style=discord.ButtonStyle.primary, emoji=f"{theme.documentIcon}")
     async def view_history(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_change_history(interaction)
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️")
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{theme.backIcon}")
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         minister_menu_cog = self.bot.get_cog("MinisterMenu")
         if minister_menu_cog:
@@ -337,7 +344,7 @@ class ChangeHistoryView(discord.ui.View):
         # Pagination buttons
         if self.max_page > 0:
             prev_button = discord.ui.Button(
-                label="◀️",
+                label="", emoji=f"{theme.prevIcon}",
                 style=discord.ButtonStyle.secondary,
                 disabled=self.page == 0
             )
@@ -345,7 +352,7 @@ class ChangeHistoryView(discord.ui.View):
             self.add_item(prev_button)
 
             next_button = discord.ui.Button(
-                label="▶️",
+                label="", emoji=f"{theme.nextIcon}",
                 style=discord.ButtonStyle.secondary,
                 disabled=self.page >= self.max_page
             )
@@ -356,7 +363,7 @@ class ChangeHistoryView(discord.ui.View):
         back_button = discord.ui.Button(
             label="Back",
             style=discord.ButtonStyle.primary,
-            emoji="⬅️",
+            emoji=f"{theme.backIcon}",
             row=1 if self.max_page > 0 else 0
         )
         back_button.callback = self.back_button_callback
@@ -381,9 +388,9 @@ class ChangeHistoryView(discord.ui.View):
 class MinisterArchive(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.svs_conn = sqlite3.connect("db/svs.sqlite")
+        self.svs_conn = sqlite3.connect("db/svs.sqlite", timeout=30.0, check_same_thread=False)
         self.svs_cursor = self.svs_conn.cursor()
-        self.users_conn = sqlite3.connect('db/users.sqlite')
+        self.users_conn = sqlite3.connect('db/users.sqlite', timeout=30.0, check_same_thread=False)
         self.users_cursor = self.users_conn.cursor()
 
         # Create archive tables
@@ -430,6 +437,14 @@ class MinisterArchive(commands.Cog):
 
         self.svs_conn.commit()
 
+    def cog_unload(self):
+        """Close database connections when cog is unloaded."""
+        try:
+            self.svs_conn.close()
+            self.users_conn.close()
+        except Exception:
+            pass
+
     async def is_global_admin(self, user_id: int) -> bool:
         """Check if user is a global admin"""
         minister_menu_cog = self.bot.get_cog("MinisterMenu")
@@ -442,32 +457,28 @@ class MinisterArchive(commands.Cog):
         """Show the main archive menu"""
         # Check global admin permission
         if not await self.is_global_admin(interaction.user.id):
-            await interaction.response.send_message("❌ Only global administrators can access archives.", ephemeral=True)
+            await interaction.response.send_message(f"{theme.deniedIcon} Only global administrators can access archives.", ephemeral=True)
             return
 
         embed = discord.Embed(
-            title="📚 Minister Schedule Archives",
+            title=f"{theme.documentIcon} Minister Schedule Archives",
             description=(
-                "Manage minister schedule archives and change history:\n\n"
-                "Available Operations\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                "💾 **Save Current Schedule**\n"
-                "└ Archive current minister appointments\n\n"
-                "📚 **View Archives**\n"
-                "└ Browse previously saved archives\n\n"
-                "📜 **Current Change History**\n"
-                "└ See all changes made since the last archive\n\n"
-                "━━━━━━━━━━━━━━━━━━━━━━"
+                f"Manage minister schedule archives and change history:\n\n"
+                f"Available Operations\n"
+                f"{theme.middleDivider}\n\n"
+                f"{theme.saveIcon} **Save Current Schedule**\n"
+                f"└ Archive current minister appointments\n\n"
+                f"{theme.documentIcon} **View Archives**\n"
+                f"└ Browse previously saved archives\n\n"
+                f"{theme.listIcon} **Current Change History**\n"
+                f"└ See all changes made since the last archive\n\n"
+                f"{theme.lowerDivider}"
             ),
-            color=discord.Color.blue()
+            color=theme.emColor1
         )
 
         view = ArchiveMenuView(self.bot, self)
-
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view)
+        await safe_edit_message(interaction, embed=embed, view=view)
 
     async def save_current_schedule(self, interaction: discord.Interaction, archive_name: str):
         """Save the current minister schedule to an archive"""
@@ -479,7 +490,7 @@ class MinisterArchive(commands.Cog):
             appointments = self.svs_cursor.fetchall()
 
             if not appointments:
-                await interaction.followup.send("❌ No appointments to archive.", ephemeral=True)
+                await interaction.followup.send(f"{theme.deniedIcon} No appointments to archive.", ephemeral=True)
                 return
 
             # Create archive record
@@ -560,17 +571,17 @@ class MinisterArchive(commands.Cog):
 
             # Show confirmation and prompt for clearing
             embed = discord.Embed(
-                title="✅ Archive Created Successfully",
+                title=f"{theme.verifiedIcon} Archive Created Successfully",
                 description=(
                     f"**Archive Name:** {archive_name}\n"
                     f"**Archive ID:** {archive_id}\n"
                     f"**Appointments Saved:** {len(appointments)}\n"
                     f"**Created By:** {created_by_name}\n\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                    "**Would you like to clear all minister appointments to prepare for the next KvK?**\n\n"
-                    "⚠️ This will remove all current appointments across Construction, Research, and Training days."
+                    f"{theme.middleDivider}\n\n"
+                    f"**Would you like to clear all minister appointments to prepare for the next KvK?**\n\n"
+                    f"{theme.warnIcon} This will remove all current appointments across Construction, Research, and Training days."
                 ),
-                color=discord.Color.green()
+                color=theme.emColor3
             )
             embed.set_footer(text=f"Created at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
@@ -578,7 +589,9 @@ class MinisterArchive(commands.Cog):
             await interaction.followup.send(embed=embed, view=view)
 
         except Exception as e:
-            await interaction.followup.send(f"❌ Error creating archive: {e}", ephemeral=True)
+            logger.error(f"Error creating archive: {e}")
+            print(f"Error creating archive: {e}")
+            await interaction.followup.send(f"{theme.deniedIcon} Error creating archive: {e}", ephemeral=True)
 
     async def clear_all_after_archive(self, interaction: discord.Interaction, archive_id: int):
         """Clear all minister appointments after archiving"""
@@ -587,7 +600,7 @@ class MinisterArchive(commands.Cog):
         try:
             minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
             if not minister_schedule_cog:
-                await interaction.followup.send("❌ Minister Schedule module not found.", ephemeral=True)
+                await interaction.followup.send(f"{theme.deniedIcon} Minister Schedule module not found.", ephemeral=True)
                 return
 
             cleared_total = 0
@@ -629,7 +642,7 @@ class MinisterArchive(commands.Cog):
 
             # Send log to minister log channel
             embed = discord.Embed(
-                title="🗑️ All Minister Appointments Cleared",
+                title=f"{theme.trashIcon} All Minister Appointments Cleared",
                 description=f"All {cleared_total} appointments cleared after archiving.\n\nReady for next KvK prep week.",
                 color=discord.Color.orange()
             )
@@ -641,9 +654,9 @@ class MinisterArchive(commands.Cog):
 
             # Return to main menu
             embed = discord.Embed(
-                title="✅ Appointments Cleared",
+                title=f"{theme.verifiedIcon} Appointments Cleared",
                 description=f"Successfully cleared {cleared_total} minister appointments.\n\nThe system is now ready for the next KvK prep week.",
-                color=discord.Color.green()
+                color=theme.emColor3
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -652,7 +665,9 @@ class MinisterArchive(commands.Cog):
                 await minister_menu_cog.show_minister_channel_menu(interaction)
 
         except Exception as e:
-            await interaction.followup.send(f"❌ Error clearing appointments: {e}", ephemeral=True)
+            logger.error(f"Error clearing appointments: {e}")
+            print(f"Error clearing appointments: {e}")
+            await interaction.followup.send(f"{theme.deniedIcon} Error clearing appointments: {e}", ephemeral=True)
 
     async def show_archive_list(self, interaction: discord.Interaction):
         """Show list of all archives"""
@@ -674,12 +689,12 @@ class MinisterArchive(commands.Cog):
 
             if not archives:
                 embed = discord.Embed(
-                    title="📚 Minister Schedule Archives",
+                    title=f"{theme.archiveIcon} Minister Schedule Archives",
                     description="No archives found.\n\nUse the **Save Current Schedule** button to create your first archive.",
-                    color=discord.Color.blue()
+                    color=theme.emColor1
                 )
                 view = discord.ui.View(timeout=7200)
-                back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️")
+                back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{theme.backIcon}")
 
                 async def back_callback(inter: discord.Interaction):
                     await self.show_archive_menu(inter)
@@ -694,9 +709,9 @@ class MinisterArchive(commands.Cog):
                 return
 
             embed = discord.Embed(
-                title="📚 Minister Schedule Archives",
+                title=f"{theme.documentIcon} Minister Schedule Archives",
                 description=f"**Total Archives:** {len(archives)}\n\nSelect an archive to view details:",
-                color=discord.Color.blue()
+                color=theme.emColor1
             )
 
             view = ArchiveListView(self.bot, self, archives)
@@ -707,7 +722,9 @@ class MinisterArchive(commands.Cog):
                 await interaction.response.edit_message(embed=embed, view=view)
 
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error loading archives: {e}", ephemeral=True)
+            logger.error(f"Error loading archives: {e}")
+            print(f"Error loading archives: {e}")
+            await interaction.response.send_message(f"{theme.deniedIcon} Error loading archives: {e}", ephemeral=True)
 
     async def show_archive_details(self, interaction: discord.Interaction, archive_id: int):
         """Show details of a specific archive"""
@@ -721,7 +738,7 @@ class MinisterArchive(commands.Cog):
             archive_info = self.svs_cursor.fetchone()
 
             if not archive_info:
-                await interaction.response.send_message("❌ Archive not found.", ephemeral=True)
+                await interaction.response.send_message(f"{theme.deniedIcon} Archive not found.", ephemeral=True)
                 return
 
             archive_name, created_at, created_by_name = archive_info
@@ -741,28 +758,26 @@ class MinisterArchive(commands.Cog):
             created_date = datetime.fromisoformat(created_at).strftime("%Y-%m-%d %H:%M:%S")
 
             embed = discord.Embed(
-                title=f"📚 Archive: {archive_name}",
+                title=f"{theme.documentIcon} Archive: {archive_name}",
                 description=(
                     f"**Archive ID:** {archive_id}\n"
                     f"**Created:** {created_date}\n"
                     f"**Created By:** {created_by_name}\n\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"{theme.middleDivider}\n\n"
                     f"**Total Appointments:** {total_count}\n\n"
                     f"{type_breakdown if type_breakdown else 'No appointments in this archive.'}\n\n"
-                    "Click a button below to view appointments for each day:"
+                    f"Click a button below to view appointments for each day:"
                 ),
-                color=discord.Color.blue()
+                color=theme.emColor1
             )
 
             view = ArchiveDetailsView(self.bot, self, archive_id, archive_info, type_counts)
-
-            try:
-                await interaction.response.edit_message(embed=embed, view=view)
-            except discord.InteractionResponded:
-                await interaction.edit_original_response(embed=embed, view=view)
+            await safe_edit_message(interaction, embed=embed, view=view)
 
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error loading archive details: {e}", ephemeral=True)
+            logger.error(f"Error loading archive details: {e}")
+            print(f"Error loading archive details: {e}")
+            await interaction.response.send_message(f"{theme.deniedIcon} Error loading archive details: {e}", ephemeral=True)
 
     async def show_archive_appointments(self, interaction: discord.Interaction, archive_id: int, appointment_type: str):
         """Show detailed appointment list for a specific activity day in an archive"""
@@ -782,12 +797,12 @@ class MinisterArchive(commands.Cog):
 
             if not appointments:
                 embed = discord.Embed(
-                    title=f"📋 {appointment_type} Appointments",
+                    title=f"{theme.listIcon} {appointment_type} Appointments",
                     description=f"No appointments found for {appointment_type} in this archive.",
-                    color=discord.Color.blue()
+                    color=theme.emColor1
                 )
                 view = discord.ui.View(timeout=7200)
-                back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️")
+                back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{theme.backIcon}")
 
                 async def back_callback(inter: discord.Interaction):
                     await self.show_archive_details(inter, archive_id)
@@ -806,7 +821,9 @@ class MinisterArchive(commands.Cog):
             alliance_conn.close()
 
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error loading appointments: {e}", ephemeral=True)
+            logger.error(f"Error loading appointments: {e}")
+            print(f"Error loading appointments: {e}")
+            await interaction.response.send_message(f"{theme.deniedIcon} Error loading appointments: {e}", ephemeral=True)
 
     async def update_appointments_embed(self, interaction: discord.Interaction, view: ArchiveAppointmentsView):
         """Update the appointments embed with paginated records"""
@@ -834,40 +851,32 @@ class MinisterArchive(commands.Cog):
             description = "\n".join(appointment_lines) if appointment_lines else "No appointments to display."
 
             embed = discord.Embed(
-                title=f"📋 {view.appointment_type} - Archive Appointments",
+                title=f"{theme.listIcon} {view.appointment_type} - Archive Appointments",
                 description=description,
-                color=discord.Color.blue()
+                color=theme.emColor1
             )
             embed.set_footer(text=f"Page {view.page + 1}/{view.max_page + 1} • Total: {len(view.appointments)} appointments")
-
-            try:
-                await interaction.response.edit_message(embed=embed, view=view)
-            except discord.InteractionResponded:
-                await interaction.edit_original_response(embed=embed, view=view)
-
+            await safe_edit_message(interaction, embed=embed, view=view)
             alliance_conn.close()
 
         except Exception as e:
+            logger.error(f"Error updating appointments embed: {e}")
             print(f"Error updating appointments embed: {e}")
 
     async def show_channel_selector_for_post(self, interaction: discord.Interaction, archive_id: int, appointment_type: str, appointments):
         """Show channel selector for posting archive appointments"""
         embed = discord.Embed(
-            title=f"📤 Post {appointment_type} to Channel",
+            title=f"{theme.announceIcon} Post {appointment_type} to Channel",
             description=(
                 f"Select a channel to post the archived **{appointment_type}** appointments.\n\n"
                 f"**Total Appointments:** {len(appointments)}\n\n"
                 "This will create a formatted message in the selected channel showing all appointments."
             ),
-            color=discord.Color.green()
+            color=theme.emColor3
         )
 
         view = PostArchiveChannelView(self.bot, self, archive_id, appointment_type, appointments)
-
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view)
+        await safe_edit_message(interaction, embed=embed, view=view)
 
     async def post_archive_to_channel(self, interaction: discord.Interaction, channel: discord.TextChannel, archive_id: int, appointment_type: str, appointments):
         """Post archive appointments to selected channel"""
@@ -887,7 +896,7 @@ class MinisterArchive(commands.Cog):
             archive_info = self.svs_cursor.fetchone()
 
             if not archive_info:
-                await interaction.followup.send("❌ Archive not found.", ephemeral=True)
+                await interaction.followup.send(f"{theme.deniedIcon} Archive not found.", ephemeral=True)
                 return
 
             archive_name, created_at = archive_info
@@ -928,9 +937,9 @@ class MinisterArchive(commands.Cog):
 
                 # Post first embed with header
                 embed = discord.Embed(
-                    title=f"📋 {appointment_type} - {archive_name}",
+                    title=f"{theme.listIcon} {appointment_type} - {archive_name}",
                     description=chunks[0],
-                    color=discord.Color.blue()
+                    color=theme.emColor1
                 )
                 embed.set_footer(text=f"Archive from {created_date} • Part 1/{len(chunks)} • Total: {len(appointments)} appointments")
                 await channel.send(embed=embed)
@@ -939,16 +948,16 @@ class MinisterArchive(commands.Cog):
                 for i, chunk in enumerate(chunks[1:], start=2):
                     embed = discord.Embed(
                         description=chunk,
-                        color=discord.Color.blue()
+                        color=theme.emColor1
                     )
                     embed.set_footer(text=f"Part {i}/{len(chunks)}")
                     await channel.send(embed=embed)
             else:
                 # Single embed
                 embed = discord.Embed(
-                    title=f"📋 {appointment_type} - {archive_name}",
+                    title=f"{theme.listIcon} {appointment_type} - {archive_name}",
                     description=description_text,
-                    color=discord.Color.blue()
+                    color=theme.emColor1
                 )
                 embed.set_footer(text=f"Archive from {created_date} • Total: {len(appointments)} appointments")
                 await channel.send(embed=embed)
@@ -957,9 +966,9 @@ class MinisterArchive(commands.Cog):
 
             # Show success message
             success_embed = discord.Embed(
-                title="✅ Posted to Channel",
+                title=f"{theme.verifiedIcon} Posted to Channel",
                 description=f"Successfully posted **{len(appointments)} {appointment_type}** appointments to {channel.mention}",
-                color=discord.Color.green()
+                color=theme.emColor3
             )
 
             await interaction.followup.send(embed=success_embed, ephemeral=True)
@@ -968,7 +977,9 @@ class MinisterArchive(commands.Cog):
             await self.show_archive_appointments(interaction, archive_id, appointment_type)
 
         except Exception as e:
-            await interaction.followup.send(f"❌ Error posting to channel: {e}", ephemeral=True)
+            logger.error(f"Error posting to channel: {e}")
+            print(f"Error posting to channel: {e}")
+            await interaction.followup.send(f"{theme.deniedIcon} Error posting to channel: {e}", ephemeral=True)
 
     async def show_delete_archive_confirmation(self, interaction: discord.Interaction, archive_id: int, archive_info):
         """Show confirmation dialog before deleting an archive"""
@@ -982,7 +993,7 @@ class MinisterArchive(commands.Cog):
         appointment_count = self.svs_cursor.fetchone()[0]
 
         embed = discord.Embed(
-            title="⚠️ Delete Archive Confirmation",
+            title=f"{theme.warnIcon} Delete Archive Confirmation",
             description=(
                 f"**Are you sure you want to delete this archive?**\n\n"
                 f"**Archive Name:** {archive_name}\n"
@@ -990,22 +1001,18 @@ class MinisterArchive(commands.Cog):
                 f"**Created:** {created_date}\n"
                 f"**Created By:** {created_by_name}\n"
                 f"**Appointments:** {appointment_count}\n\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                "⚠️ **This action cannot be undone!**\n\n"
-                "This will permanently delete:\n"
+                f"{theme.middleDivider}\n\n"
+                f"{theme.warnIcon} **This action cannot be undone!**\n\n"
+                f"This will permanently delete:\n"
                 f"• All {appointment_count} archived appointments\n"
-                "• Associated change history for this archive\n"
-                "• Archive metadata"
+                f"• Associated change history for this archive\n"
+                f"• Archive metadata"
             ),
-            color=discord.Color.red()
+            color=theme.emColor2
         )
 
         view = DeleteArchiveConfirmView(self.bot, self, archive_id, archive_info)
-
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view)
+        await safe_edit_message(interaction, embed=embed, view=view)
 
     async def delete_archive(self, interaction: discord.Interaction, archive_id: int):
         """Delete an archive and all associated data"""
@@ -1021,7 +1028,7 @@ class MinisterArchive(commands.Cog):
             archive_info = self.svs_cursor.fetchone()
 
             if not archive_info:
-                await interaction.followup.send("❌ Archive not found.", ephemeral=True)
+                await interaction.followup.send(f"{theme.deniedIcon} Archive not found.", ephemeral=True)
                 return
 
             archive_name, created_at, created_by_name = archive_info
@@ -1054,7 +1061,7 @@ class MinisterArchive(commands.Cog):
             minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
             if minister_schedule_cog:
                 embed = discord.Embed(
-                    title="🗑️ Archive Deleted",
+                    title=f"{theme.trashIcon} Archive Deleted",
                     description=(
                         f"**Archive:** {archive_name}\n"
                         f"**Archive ID:** {archive_id}\n"
@@ -1072,20 +1079,22 @@ class MinisterArchive(commands.Cog):
 
             # Show success message and return to archive list
             success_embed = discord.Embed(
-                title="✅ Archive Deleted Successfully",
+                title=f"{theme.verifiedIcon} Archive Deleted Successfully",
                 description=(
                     f"**Archive:** {archive_name}\n"
                     f"**Archive ID:** {archive_id}\n\n"
                     f"Deleted {appointment_count} appointments and all associated data."
                 ),
-                color=discord.Color.green()
+                color=theme.emColor3
             )
 
             await interaction.followup.send(embed=success_embed, ephemeral=True)
             await self.show_archive_list(interaction)
 
         except Exception as e:
-            await interaction.followup.send(f"❌ Error deleting archive: {e}", ephemeral=True)
+            logger.error(f"Error deleting archive: {e}")
+            print(f"Error deleting archive: {e}")
+            await interaction.followup.send(f"{theme.deniedIcon} Error deleting archive: {e}", ephemeral=True)
 
     async def show_change_history(self, interaction: discord.Interaction, archive_id: int = None):
         """Show change history (for specific archive or all current changes)"""
@@ -1113,14 +1122,14 @@ class MinisterArchive(commands.Cog):
             history_records = self.svs_cursor.fetchall()
 
             if not history_records:
-                title = f"📜 Change History - Archive #{archive_id}" if archive_id else "📜 Current Change History"
+                title = f"{theme.listIcon} Change History - Archive #{archive_id}" if archive_id else f"{theme.listIcon} Current Change History"
                 embed = discord.Embed(
                     title=title,
                     description="No change history found.",
-                    color=discord.Color.blue()
+                    color=theme.emColor1
                 )
                 view = discord.ui.View(timeout=7200)
-                back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️")
+                back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{theme.backIcon}")
 
                 async def back_callback(inter: discord.Interaction):
                     if archive_id:
@@ -1138,7 +1147,9 @@ class MinisterArchive(commands.Cog):
             await self.update_history_embed(interaction, history_records, 0, archive_id, view)
 
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error loading change history: {e}", ephemeral=True)
+            logger.error(f"Error loading change history: {e}")
+            print(f"Error loading change history: {e}")
+            await interaction.response.send_message(f"{theme.deniedIcon} Error loading change history: {e}", ephemeral=True)
 
     async def show_archive_change_history(self, interaction: discord.Interaction, archive_id: int):
         """Show change history for a specific archive"""
@@ -1152,16 +1163,16 @@ class MinisterArchive(commands.Cog):
 
         history_lines = []
         action_emojis = {
-            "add": "➕",
-            "remove": "➖",
-            "reschedule": "🔄",
-            "clear_all": "🗑️",
-            "time_slot_mode_change": "🕐",
-            "archive_created": "💾"
+            "add": f"{theme.addIcon}",
+            "remove": f"{theme.trashIcon}",
+            "reschedule": f"{theme.refreshIcon}",
+            "clear_all": f"{theme.trashIcon}",
+            "time_slot_mode_change": f"{theme.timeIcon}",
+            "archive_created": f"{theme.saveIcon}"
         }
 
         for timestamp, username, action_type, appointment_type, fid, nickname, old_time, new_time, alliance_name, additional_data in page_records:
-            emoji = action_emojis.get(action_type, "📝")
+            emoji = action_emojis.get(action_type, f"{theme.listIcon}")
             dt = datetime.fromisoformat(timestamp).strftime("%m/%d %H:%M")
 
             if action_type == "add":
@@ -1180,20 +1191,20 @@ class MinisterArchive(commands.Cog):
                         data = json.loads(additional_data)
                         archive_name = data.get("archive_name", "Unknown")
                         history_lines.append(f"{emoji} `{dt}` **{username}** created archive: **{archive_name}**")
-                    except:
+                    except Exception:
                         history_lines.append(f"{emoji} `{dt}` **{username}** created an archive")
                 else:
                     history_lines.append(f"{emoji} `{dt}` **{username}** created an archive")
             else:
                 history_lines.append(f"{emoji} `{dt}` **{username}** - {action_type}")
 
-        title = f"📜 Change History - Archive #{archive_id}" if archive_id else "📜 Current Change History"
+        title = f"{theme.listIcon} Change History - Archive #{archive_id}" if archive_id else f"{theme.listIcon} Current Change History"
         description = "\n".join(history_lines) if history_lines else "No changes to display."
 
         embed = discord.Embed(
             title=title,
             description=description,
-            color=discord.Color.blue()
+            color=theme.emColor1
         )
         embed.set_footer(text=f"Page {page + 1}/{((len(history_records) - 1) // 25) + 1} • Total: {len(history_records)} changes")
 
