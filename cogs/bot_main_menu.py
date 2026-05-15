@@ -335,7 +335,7 @@ class MainMenu(commands.Cog):
 
 
     def _fc_label(self, fl: int) -> str:
-        """Render a furnace_lv int as e.g. 'FC 8 - 2'. Falls back to the int."""
+        """Render a furnace_lv int as e.g. 'TC 8-2'. Falls back to the int."""
         cog = self.bot.get_cog("AllianceMemberOperations")
         if cog and hasattr(cog, 'level_mapping'):
             return cog.level_mapping.get(fl, str(fl))

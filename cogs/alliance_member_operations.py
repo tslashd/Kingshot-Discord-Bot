@@ -91,7 +91,7 @@ class MemberFilterModal(discord.ui.Modal):
             max_length=20,
         )
         self.state_input = discord.ui.TextInput(
-            label="State (exact match)",
+            label="Kingdom (exact match)",
             default=parent_view.filter_state,
             required=False,
             max_length=10,
@@ -115,12 +115,12 @@ class MemberFilterModal(discord.ui.Modal):
 class MemberListView(discord.ui.View):
     PAGE_SIZE = 20
     SORTS = [
-        ("FC \u2193",      lambda m: (-m['furnace_lv'], m['nickname'].casefold()), False),
-        ("FC \u2191",      lambda m: (m['furnace_lv'], m['nickname'].casefold()),  False),
-        ("Name A\u2192Z",  lambda m: m['nickname'].casefold(),                      False),
-        ("Name Z\u2192A",  lambda m: m['nickname'].casefold(),                      True),
-        ("ID \u2191",      lambda m: m['fid'],                                       False),
-        ("State \u2191",   lambda m: (m['kid'], -m['furnace_lv']),                  False),
+        ("TC ↓", lambda m: (-m['furnace_lv'], m['nickname'].casefold()), False),
+        ("TC ↑", lambda m: (m['furnace_lv'], m['nickname'].casefold()), False),
+        ("Name A→Z", lambda m: m['nickname'].casefold(), False),
+        ("Name Z→A", lambda m: m['nickname'].casefold(), True),
+        ("ID ↑", lambda m: m['fid'], False),
+        ("Kingdom ↑", lambda m: (m['kid'], -m['furnace_lv']), False),
     ]
 
     def __init__(self, members, alliance_id, alliance_name, cog, author_id):
@@ -251,8 +251,8 @@ class MemberListView(discord.ui.View):
 
         header = [
             f"{theme.upperDivider}",
-            (f"{theme.chartIcon} **Total:** `{all_count}`  \u00B7  "
-             f"**Highest:** `{max_label}`  \u00B7  **Avg:** `{avg_label}`"),
+            (f"{theme.chartIcon} **Total:** `{all_count}`  ·  "
+             f"**Highest:** `{max_label}`  ·  **Avg:** `{avg_label}`"),
             f"{theme.listIcon} **Sort:** `{self.SORTS[self.sort_idx][0]}`",
         ]
         if self._has_filter():
@@ -264,7 +264,7 @@ class MemberListView(discord.ui.View):
             if self.filter_state:
                 parts.append(f"state=`{self.filter_state}`")
             header.append(
-                f"{theme.searchIcon} **Filter:** {' \u00B7 '.join(parts)}  \u2192  `{total}` match"
+                f"{theme.searchIcon} **Filter:** {' · '.join(parts)}  →  `{total}` match"
             )
         header.append(f"{theme.lowerDivider}")
 
@@ -277,7 +277,7 @@ class MemberListView(discord.ui.View):
                 raw_nick = m['nickname'] or "(no name)"
                 nick = _isolate_rtl(raw_nick)
                 line1 = _ltr_line(f"`{offset:>3}.` {theme.userIcon} **{nick}**")
-                line2 = f"     `{level}` \u00B7 `ID {m['fid']}` \u00B7 `State {m['kid']}`"
+                line2 = f"     `{level}` · `ID {m['fid']}` · `State {m['kid']}`"
                 rows.append(f"{line1}\n{line2}")
             body = "\n".join(rows)
 
