@@ -349,7 +349,7 @@ def calculate_next_occurrence(event_type: str, from_date: Optional[datetime] = N
 
     return None
 
-def calculate_crazy_joe_dates(from_date: Optional[datetime] = None) -> Tuple[Optional[datetime], Optional[datetime]]:
+def calculate_viking_vengeance_dates(from_date: Optional[datetime] = None) -> Tuple[Optional[datetime], Optional[datetime]]:
     """
     Calculate next Tuesday and Thursday dates for Viking Vengeance event
 

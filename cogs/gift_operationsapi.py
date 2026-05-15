@@ -1,3 +1,6 @@
+"""
+Gift code distribution API client. Syncs codes with the shared gift-code-api service.
+"""
 import json
 import aiohttp
 import asyncio
@@ -8,8 +11,9 @@ from datetime import datetime
 import discord
 import ssl
 import logging
+from .pimp_my_bot import theme
 
-logger = logging.getLogger("gift_operationsapi")
+logger = logging.getLogger('gift')
 
 class GiftCodeAPI:
     def __init__(self, bot):
@@ -33,14 +37,16 @@ class GiftCodeAPI:
         if hasattr(bot, 'conn'):
             self.conn = bot.conn
             self.cursor = self.conn.cursor()
+            self._owns_conn = False
         else:
-            self.conn = sqlite3.connect('db/giftcode.sqlite', timeout=30.0)
+            self.conn = sqlite3.connect('db/giftcode.sqlite', timeout=30.0, check_same_thread=False)
             self.cursor = self.conn.cursor()
-            
-        self.settings_conn = sqlite3.connect('db/settings.sqlite', timeout=30.0)
+            self._owns_conn = True
+
+        self.settings_conn = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
         self.settings_cursor = self.settings_conn.cursor()
-        
-        self.users_conn = sqlite3.connect('db/users.sqlite', timeout=30.0)
+
+        self.users_conn = sqlite3.connect('db/users.sqlite', timeout=30.0, check_same_thread=False)
         self.users_cursor = self.users_conn.cursor()
         
         # Configure SQLite for better concurrent access, avoid DB locks
@@ -54,9 +60,9 @@ class GiftCodeAPI:
         self.ssl_context.check_hostname = False
         self.ssl_context.verify_mode = ssl.CERT_NONE
         
-        self.logger = logging.getLogger("gift_operationsapi")
-        
-        asyncio.create_task(self.start_api_check())
+        self.logger = logging.getLogger('gift')
+
+        self._api_check_task = asyncio.create_task(self.start_api_check())
 
     async def _execute_with_retry(self, operation, *args, max_retries=3, delay=0.1):
         """Execute a database operation with retry logic for handling locks."""
@@ -108,13 +114,17 @@ class GiftCodeAPI:
         except Exception as e:
             self.logger.exception(f"Fatal error in API check loop: {e}")
 
-    def __del__(self):
-        """Clean up database connections."""
+    def cog_unload(self):
+        """Clean up database connections and the API check task when unloaded."""
+        task = getattr(self, '_api_check_task', None)
+        if task is not None and not task.done():
+            task.cancel()
         try:
-            self.conn.close()
+            if getattr(self, '_owns_conn', True):
+                self.conn.close()
             self.settings_conn.close()
             self.users_conn.close()
-        except:
+        except Exception:
             pass
     
     async def _wait_for_rate_limit(self):
@@ -144,7 +154,7 @@ class GiftCodeAPI:
             return backoff
         elif response.status == 400 and "previously marked invalid" in response_text:
             # Expected behavior for expired/invalid codes - log at debug level
-            self.logger.debug(f"Code already marked invalid on API: {response_text[:100]}")
+            self.logger.info(f"Code already marked invalid on API: {response_text[:100]}")
             return 0  # No backoff needed for expected invalid codes
         else: # Other errors - standard backoff
             self.logger.error(f"API error: {response.status}, {response_text[:200]}")
@@ -336,15 +346,15 @@ class GiftCodeAPI:
                                                 elif is_valid is False:
                                                     invalid_codes_count += 1
                                                     self.logger.warning(f"API code '{code}' is invalid: {validation_msg}")
-                                                    validation_status = f"❌ Invalid: {validation_msg}"
+                                                    validation_status = f"{theme.deniedIcon} Invalid: {validation_msg}"
                                                     auto_alliances = []
                                                 else:
                                                     self.logger.warning(f"API code '{code}' validation inconclusive after retries: {validation_msg}")
-                                                    validation_status = f"⚠️ Pending"
+                                                    validation_status = f"{theme.warnIcon} Pending"
                                                     auto_alliances = []
                                             else:
                                                 self.logger.error("GiftOperations cog not found for validation!")
-                                                validation_status = "❌ Error"
+                                                validation_status = f"{theme.deniedIcon} Error"
                                                 auto_alliances = []
 
                                             self.settings_cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
@@ -352,22 +362,22 @@ class GiftCodeAPI:
                                             if admin_ids:
                                                 embed_description = (
                                                     f"**Gift Code Details**\n"
-                                                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                                    f"🎁 **Code:** `{code}`\n"
-                                                    f"📅 **Date:** `{formatted_date}`\n"
-                                                    f"📝 **Validation Status:** `{validation_status}`\n"
-                                                    f"🌐 **Source:** `Retrieved from Bot API`\n"
-                                                    f"⏰ **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
-                                                    f"🔄 **Auto Alliance Count:** `{len(auto_alliances)}`\n"
+                                                    f"{theme.upperDivider}\n"
+                                                    f"{theme.giftIcon} **Code:** `{code}`\n"
+                                                    f"{theme.calendarIcon} **Date:** `{formatted_date}`\n"
+                                                    f"{theme.listIcon} **Validation Status:** `{validation_status}`\n"
+                                                    f"{theme.linkIcon} **Source:** `Retrieved from Bot API`\n"
+                                                    f"{theme.alarmClockIcon} **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
+                                                    f"{theme.refreshIcon} **Auto Alliance Count:** `{len(auto_alliances)}`\n"
                                                 )
 
                                                 if is_valid is None:
                                                     embed_description += (
-                                                        f"\n⚠️ **Auto-redemption delayed** - Validation inconclusive after several retries.\n"
+                                                        f"\n{theme.warnIcon} **Auto-redemption delayed** - Validation inconclusive after several retries.\n"
                                                         f"Please wait for periodic validation to complete, after which auto-redemption will begin.\n"
                                                     )
 
-                                                embed_description += f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                                                embed_description += f"{theme.lowerDivider}\n"
 
                                                 embed_color = discord.Color.green() if is_valid else (discord.Color.red() if is_valid is False else discord.Color.orange())
 
@@ -417,14 +427,14 @@ class GiftCodeAPI:
                                                 gift_operations = self.bot.get_cog('GiftOperations')
                                                 if gift_operations:
                                                     self.logger.info(f"Queueing auto-distribution for code {code} to {len(auto_alliances)} alliances")
+                                                    from . import gift_redemption
                                                     for alliance in auto_alliances:
-                                                        try:  # Use the queue system
-                                                            await gift_operations.add_to_validation_queue(
+                                                        try:
+                                                            await gift_redemption.enqueue_redemption(
+                                                                gift_operations,
                                                                 giftcode=code,
-                                                                source='api-auto',
-                                                                operation_type='redemption',
                                                                 alliance_id=alliance[0],
-                                                                interaction=None
+                                                                source='api-auto',
                                                             )
                                                         except Exception as e:
                                                             self.logger.exception(f"Error queueing auto-distribution for code {code} to alliance {alliance[0]}: {e}")
@@ -500,7 +510,7 @@ class GiftCodeAPI:
                             return False
                             
                 except aiohttp.ClientError as e:
-                    self.logger.exception(f"HTTP request error: {e}")
+                    self.logger.warning(f"Connection error syncing with Gift Code API: {type(e).__name__}")
                     return False
             
         except Exception as e:
@@ -563,13 +573,16 @@ class GiftCodeAPI:
                             return True
                         else:
                             self.logger.warning(f"Failed to add code {giftcode} to API: {response.status}, {response_text[:200]}")
-                            self.logger.info(f"Code {giftcode} rejected by API but keeping local validation status - API may have stale data")
+                            if "invalid" in response_text.lower(): # Code was rejected as invalid by API, mark it as invalid locally
+                                self.logger.warning(f"Code {giftcode} marked invalid by API")
+                                self.cursor.execute("UPDATE gift_codes SET validation_status = 'invalid' WHERE giftcode = ?", (giftcode,))
+                                await self._safe_commit(self.conn, "mark code invalid")
                             backoff_time = await self._handle_api_error(response, response_text)
                             await asyncio.sleep(backoff_time)
                             return False
 
                 except aiohttp.ClientError as e:
-                    self.logger.exception(f"HTTP error adding code {giftcode}: {e}")
+                    self.logger.warning(f"Connection error adding code {giftcode} to API: {type(e).__name__}")
                     return False
             
         except Exception as e:
@@ -625,7 +638,7 @@ class GiftCodeAPI:
                             await asyncio.sleep(backoff_time)
                             return False
                 except aiohttp.ClientError as e:
-                    self.logger.exception(f"HTTP error removing code {giftcode}: {e}")
+                    self.logger.warning(f"Connection error removing code {giftcode} from API: {type(e).__name__}")
                     return False
         except Exception as e:
             self.logger.exception(f"Unexpected error removing code {giftcode}: {e}")
@@ -657,7 +670,7 @@ class GiftCodeAPI:
                             await asyncio.sleep(backoff_time)
                             return False
                 except aiohttp.ClientError as e:
-                    self.logger.exception(f"HTTP error checking code {giftcode}: {e}")
+                    self.logger.warning(f"Connection error checking code {giftcode} in API: {type(e).__name__}")
                     return False
         except Exception as e:
             self.logger.exception(f"Unexpected error checking code {giftcode}: {e}")
@@ -674,7 +687,7 @@ class GiftCodeAPI:
                 self.logger.info("No codes to validate")
                 return
             
-            test_fid = "244886619" # Default fallback
+            test_fid = "43180889" # Default fallback
             try:
                 gift_operations = self.bot.get_cog('GiftOperations')
                 if gift_operations and hasattr(gift_operations, 'get_test_fid'):
@@ -692,7 +705,7 @@ class GiftCodeAPI:
                 try:
                     gift_operations = self.bot.get_cog('GiftOperations')
                     if gift_operations:
-                        status = await gift_operations.claim_giftcode_rewards_wos(test_fid, code)
+                        status = await gift_operations.claim_giftcode_rewards_wos(test_fid, code, skip_cache=True)
                         
                         if status in ["TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]:
                             exists_in_api = await self.check_giftcode(code)
