@@ -1013,15 +1013,18 @@ if __name__ == "__main__":
     sys.stdout = _ConsoleFilter(sys.stdout)
 
     class CustomBot(commands.Bot):
+        no_dm: bool = False
+        save_captcha: int = 0
+
         async def on_error(self, event_name, *args, **kwargs):
             if event_name == "on_interaction":
                 error = sys.exc_info()[1]
                 if isinstance(error, discord.NotFound) and error.code == 10062:
                     return
-            
+
             await super().on_error(event_name, *args, **kwargs)
 
-        async def on_command_error(self, ctx, error):
+        async def on_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
             if isinstance(error, discord.NotFound) and error.code == 10062:
                 return
             await super().on_command_error(ctx, error)
@@ -1215,8 +1218,9 @@ if __name__ == "__main__":
                         else "no proxy"
                     )
                     sync_cog = bot.get_cog("AllianceSync")
-                    if sync_cog and hasattr(sync_cog, 'login_handler'):
-                        status = await sync_cog.login_handler.check_apis_availability()
+                    login_handler = getattr(sync_cog, 'login_handler', None)
+                    if login_handler:
+                        status = await login_handler.check_apis_availability()
                         if status.get('api1_available'):
                             startup.api_status("Gift Code Redemption API", "ok")
                         else:
