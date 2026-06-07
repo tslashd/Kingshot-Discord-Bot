@@ -2815,8 +2815,13 @@ class BearHuntReviewView(discord.ui.View):
             elif status == 'manual':
                 player = f"`{_isolate_rtl(r['nickname'])}` · `{r['fid']}`"
             else:
-                name = r['name'] or "unreadable"
-                player = f"`{_isolate_rtl(name)}` — no match"
+                cands = r.get('candidates') or []
+                if cands:
+                    top_fid, top_nick, score = cands[0]
+                    player = f"`{_isolate_rtl(top_nick)}` ({score}%) · taken by another row"
+                else:
+                    name = r['name'] or "unreadable"
+                    player = f"`{_isolate_rtl(name)}` — no match"
             lines.append(_ltr_line(f"{rank_str} {icon} {player} — `{format_damage_for_embed(r['damage'])}`"))
 
         total_pages = self._total_pages()

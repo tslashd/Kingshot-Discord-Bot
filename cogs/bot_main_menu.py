@@ -1391,7 +1391,7 @@ class AdminManagerView(discord.ui.View):
         await self.cog.show_main_menu(interaction)
 
 
-def _format_audit_state(state):
+def _format_audit_state(state: str | None) -> str:
     """Render a stored audit state. Translates legacy 'tier=X, alliances=[...]' entries too."""
     if not state:
         return "—"
@@ -1399,7 +1399,7 @@ def _format_audit_state(state):
         tier_part = state.split(",", 1)[0].split("=", 1)[1].strip()
         tier_map = {"Owner": "Bot Owner", "Global": "Global Admin",
                     "Server": "Server Admin", "Alliance": "Alliance Admin"}
-        label = tier_map.get(tier_part, tier_part)
+        label: str = tier_map.get(tier_part, tier_part)
         if "alliances=[" in state:
             try:
                 inner = state.split("alliances=[", 1)[1].rsplit("]", 1)[0].strip()
