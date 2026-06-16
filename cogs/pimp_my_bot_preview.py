@@ -237,10 +237,10 @@ class ThemePreviewView(discord.ui.View):
             inline=False
         )
 
-        # State transfer example
+        # Kingdom transfer example
         embed.add_field(
             name=f"{user_icon} Wanderer",
-            value=f"{state_old_icon} State `123` ➜ {state_icon} State `456`\n{time_icon} 1 hour ago",
+            value=f"{state_old_icon} Kingdom `123` ➜ {state_icon} Kingdom `456`\n{time_icon} 1 hour ago",
             inline=False
         )
 
@@ -355,7 +355,7 @@ class ThemePreviewView(discord.ui.View):
                 f"{divider1}\n"
                 f"**{fid_icon} ID:** `123456789`\n"
                 f"**{level_icon} Town Center Level:** `TC 8-3`\n"
-                f"**{globe_icon} State:** `999`\n"
+                f"**{globe_icon} Kingdom:** `999`\n"
                 f"{divider3}\n"
                 f"**{alliance_icon} Alliance:** `Example Alliance`\n"
                 f"{divider2}\n"

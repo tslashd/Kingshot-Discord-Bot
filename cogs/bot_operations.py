@@ -193,7 +193,10 @@ class BotOperations(commands.Cog):
                               activity_url: str | None) -> None:
         """Push the given presence to Discord via change_presence."""
         try:
-            if activity_type == 'streaming' and activity_url:
+            if activity_type == 'custom':
+                # Custom status shows the text alone, with no "Playing/Watching" verb.
+                activity = discord.CustomActivity(name=activity_text)
+            elif activity_type == 'streaming' and activity_url:
                 activity = discord.Streaming(name=activity_text, url=activity_url)
             else:
                 # Streaming-without-URL silently falls back to Playing
@@ -213,19 +216,24 @@ class BotOperations(commands.Cog):
 
     async def show_bot_presence(self, interaction: discord.Interaction):
         """Open the Bot Presence settings view. Global Admin only."""
-        _, is_global = PermissionManager.is_admin(interaction.user.id)
-        if not is_global:
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} Only Global Admins can change the bot's presence.",
-                ephemeral=True,
-            )
-            return
-        view = BotPresenceView(self)
         try:
+            _, is_global = PermissionManager.is_admin(interaction.user.id)
+            if not is_global:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Only Global Admins can change the bot's presence.",
+                    ephemeral=True,
+                )
+                return
+            view = BotPresenceView(self)
             await safe_edit_message(interaction, embed=view.build_embed(), view=view, content=None)
         except Exception as e:
             logger.error(f"Error showing bot presence: {e}")
             print(f"Error showing bot presence: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{theme.warnIcon} Couldn't open Bot Presence settings. Please try again.",
+                    ephemeral=True,
+                )
 
     @commands.Cog.listener()
     async def on_interaction(self, interaction: discord.Interaction):
@@ -241,7 +249,7 @@ class BotOperations(commands.Cog):
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.warnIcon} The bot-wide toggle was replaced by a per-alliance "
-                    f"\"Show Sync Messages\" setting under Sync Settings.",
+                    f"\"Show Sync Messages\" setting under the alliance's Settings.",
                     ephemeral=True,
                 )
             return
@@ -441,7 +449,7 @@ class BotOperations(commands.Cog):
             return None, None, [], False
     
     async def show_control_settings_menu(self, interaction: discord.Interaction):
-        """Show the per-alliance Sync Settings menu (with alliance picker)."""
+        """Show the per-alliance Settings menu (with alliance picker)."""
         try:
             if interaction.guild is None:
                 await interaction.response.send_message(f"{theme.deniedIcon} This command must be used in a server.", ephemeral=True)
@@ -469,7 +477,7 @@ class BotOperations(commands.Cog):
                 )
 
     async def show_control_settings_for(self, interaction: discord.Interaction, alliance_id: int):
-        """Hub-context entry: open Sync Settings for a known alliance (no picker)."""
+        """Hub-context entry: open Settings for a known alliance (no picker)."""
         try:
             with sqlite3.connect('db/alliance.sqlite') as db:
                 cursor = db.cursor()
@@ -523,6 +531,7 @@ class SyncSettingsView(discord.ui.View):
         self.notify_on_transfer = False
         self.keep_control_log = False
         self.show_sync_message = True
+        self.silent_notifications = False
         self.setup_components()
 
     def setup_components(self):
@@ -582,6 +591,15 @@ class SyncSettingsView(discord.ui.View):
             self.keep_log_button.callback = self.toggle_keep_control_log
             self.add_item(self.keep_log_button)
 
+            self.silent_button = discord.ui.Button(
+                label=f"Silent Posts: {'On' if self.silent_notifications else 'Off'}",
+                style=discord.ButtonStyle.success if self.silent_notifications else discord.ButtonStyle.secondary,
+                emoji=f"{theme.muteIcon}",
+                row=2,
+            )
+            self.silent_button.callback = self.toggle_silent_notifications
+            self.add_item(self.silent_button)
+
             self.auto_remove_button = discord.ui.Button(
                 label=f"Auto-Removal: {'On' if self.auto_remove else 'Off'}",
                 style=discord.ButtonStyle.success if self.auto_remove else discord.ButtonStyle.secondary,
@@ -615,7 +633,7 @@ class SyncSettingsView(discord.ui.View):
             alliance_name = next((name for aid, name in self.alliances if aid == self.selected_alliance), "Unknown")
             self.alliance_cursor.execute("""
                 SELECT auto_remove_on_transfer, notify_on_transfer, keep_control_log,
-                       show_sync_message, interval, start_time
+                       show_sync_message, interval, start_time, silent_notifications
                 FROM alliancesettings
                 WHERE alliance_id = ?
             """, (self.selected_alliance,))
@@ -626,9 +644,11 @@ class SyncSettingsView(discord.ui.View):
             self.show_sync_message = bool(result[3]) if result and len(result) > 3 and result[3] is not None else True
             self.interval = int(result[4]) if result and len(result) > 4 and result[4] is not None else 0
             self.start_time = result[5] if result and len(result) > 5 and result[5] else None
+            self.silent_notifications = bool(result[6]) if result and len(result) > 6 and result[6] is not None else False
 
             show_emoji = theme.verifiedIcon if self.show_sync_message else theme.deniedIcon
             log_emoji = theme.verifiedIcon if self.keep_control_log else theme.trashIcon
+            silent_emoji = theme.muteIcon if self.silent_notifications else theme.bellIcon
             status_emoji = theme.verifiedIcon if self.auto_remove else theme.deniedIcon
             notify_emoji = theme.bellIcon if self.notify_on_transfer else theme.muteIcon
 
@@ -636,6 +656,11 @@ class SyncSettingsView(discord.ui.View):
                 "Keep the message after sync finishes"
                 if self.keep_control_log
                 else "Delete the message after sync finishes"
+            )
+            silent_line = (
+                "Change alerts post silently — no channel notification"
+                if self.silent_notifications
+                else "Change alerts trigger normal channel notifications"
             )
             log_suffix = "" if self.show_sync_message else " _(turn on Show progress first)_"
             notify_suffix = "" if self.auto_remove else " _(turn on Auto-Removal first)_"
@@ -649,7 +674,7 @@ class SyncSettingsView(discord.ui.View):
             )
 
             embed = discord.Embed(
-                title=f"{theme.settingsIcon} Sync Settings · {alliance_name}",
+                title=f"{theme.settingsIcon} Settings · {alliance_name}",
                 description=(
                     f"{theme.upperDivider}\n"
                     f"**Schedule**\n"
@@ -657,9 +682,10 @@ class SyncSettingsView(discord.ui.View):
                     f"{theme.pinIcon} Start Time: {start_time_display}\n\n"
                     f"**Sync Channel Messages**\n"
                     f"{show_emoji} Show progress message during sync\n"
-                    f"{log_emoji} {log_line}{log_suffix}\n\n"
-                    f"**State Transfer**\n"
-                    f"{status_emoji} Auto-remove members who transfer states\n"
+                    f"{log_emoji} {log_line}{log_suffix}\n"
+                    f"{silent_emoji} {silent_line}\n\n"
+                    f"**Kingdom Transfer**\n"
+                    f"{status_emoji} Auto-remove members who transfer kingdoms\n"
                     f"{notify_emoji} Notify admin when an auto-removal happens{notify_suffix}\n"
                     f"{theme.lowerDivider}"
                 ),
@@ -667,12 +693,13 @@ class SyncSettingsView(discord.ui.View):
             )
         else:
             embed = discord.Embed(
-                title=f"{theme.settingsIcon} Sync Settings",
+                title=f"{theme.settingsIcon} Settings",
                 description=(
                     "Pick an alliance from the dropdown to configure:\n"
                     "• Whether the bot posts a sync progress message\n"
                     "• Whether that message is kept or deleted after the sync\n"
-                    "• Auto-removal of members who transfer states\n"
+                    "• Whether change alerts post silently (no channel notification)\n"
+                    "• Auto-removal of members who transfer kingdoms\n"
                     "• Admin notifications for those removals"
                 ),
                 color=theme.emColor1
@@ -792,6 +819,23 @@ class SyncSettingsView(discord.ui.View):
         except Exception as e:
             logger.error(f"Error toggling show_sync_message: {e}")
             print(f"Error toggling show_sync_message: {e}")
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} An error occurred while updating the setting.",
+                ephemeral=True,
+            )
+
+    async def toggle_silent_notifications(self, interaction: discord.Interaction):
+        try:
+            new_value = not self.silent_notifications
+            self.alliance_cursor.execute(
+                "UPDATE alliancesettings SET silent_notifications = ? WHERE alliance_id = ?",
+                (1 if new_value else 0, self.selected_alliance),
+            )
+            self.alliance_db.commit()
+            await self.update_view(interaction)
+        except Exception as e:
+            logger.error(f"Error toggling silent_notifications: {e}")
+            print(f"Error toggling silent_notifications: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while updating the setting.",
                 ephemeral=True,
@@ -925,6 +969,7 @@ _PRESENCE_TYPES: list[tuple[str, str, str]] = [
     ('listening', 'Listening to', '🎧'),
     ('watching',  'Watching',     '👁️'),
     ('competing', 'Competing in', '🏆'),
+    ('custom',    'Custom',       '💬'),
 ]
 _PRESENCE_VERB = {code: label for code, label, _ in _PRESENCE_TYPES}
 
@@ -944,10 +989,13 @@ class BotPresenceView(discord.ui.View):
 
     def build_embed(self) -> discord.Embed:
         p = self.cog.get_bot_presence()
-        verb = _PRESENCE_VERB.get(p['activity_type'], 'Playing')
-        current = f"{verb} **{p['activity_text']}**"
-        if p['activity_type'] == 'streaming' and p['activity_url']:
-            current += f"\n└ {p['activity_url']}"
+        if p['activity_type'] == 'custom':
+            current = f"**{p['activity_text']}**"
+        else:
+            verb = _PRESENCE_VERB.get(p['activity_type'], 'Playing')
+            current = f"{verb} **{p['activity_text']}**"
+            if p['activity_type'] == 'streaming' and p['activity_url']:
+                current += f"\n└ {p['activity_url']}"
         return discord.Embed(
             title=f"{theme.robotIcon} Bot Presence",
             description=(

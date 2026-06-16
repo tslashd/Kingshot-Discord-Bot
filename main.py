@@ -508,6 +508,38 @@ def check_and_install_requirements():
     startup.phase_ok("Dependencies satisfied")
     return True
 
+def ensure_opencv_headless():
+    """RapidOCR pulls in the full `opencv-python`, whose cv2 needs system GUI
+    libs (libGL.so.1) that headless servers lack — which silently disables OCR.
+    Swap to `opencv-python-headless`, which the bot's image processing uses fine
+    and needs no system libs. No-op once only the headless build is present."""
+    try:
+        from importlib.metadata import distributions
+        installed = {(d.metadata.get("Name") or "").lower().replace("_", "-")
+                     for d in distributions()}
+    except Exception:
+        return
+    if not ({"opencv-python", "opencv-contrib-python"} & installed):
+        return  # already headless-only (or no opencv) — nothing to do
+    startup.phase_start("Switching OpenCV to headless")
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "uninstall", "-y",
+             "opencv-python", "opencv-contrib-python", "opencv-python-headless"],
+            timeout=600, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        cmd = [sys.executable, "-m", "pip", "install", "--no-cache-dir", "opencv-python-headless"]
+        if break_system_packages_arg():
+            cmd.append("--break-system-packages")
+        subprocess.check_call(cmd, timeout=1200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        startup.phase_ok("OpenCV set to headless")
+    except Exception as e:
+        startup.phase_fail(
+            "OpenCV headless switch failed", details=[str(e)],
+            fix="pip uninstall -y opencv-python opencv-contrib-python && pip install opencv-python-headless",
+        )
+
+
 def setup_dependencies(beta_mode=False):
     """Main function to set up all dependencies."""
     startup.phase_start("Checking dependencies")
@@ -525,7 +557,8 @@ def setup_dependencies(beta_mode=False):
     if not check_and_install_requirements():
         startup.phase_fail("Dependencies failed", fix="pip install -r requirements.txt")
         return False
-    
+
+    ensure_opencv_headless()
     return True
 
 beta_mode = "--beta" in sys.argv
@@ -908,7 +941,7 @@ if __name__ == "__main__":
                         with open("version", "w") as f:
                             f.write(latest_tag)
 
-                        startup.phase_ok(f"Update completed (v{latest_tag} from {source_name})")
+                        startup.phase_ok(f"Update completed ({latest_tag} from {source_name})")
 
                         restart_bot()
                     else:
@@ -1144,6 +1177,45 @@ if __name__ == "__main__":
             conn_settings.execute("""CREATE INDEX IF NOT EXISTS idx_process_queue_status_priority
                 ON process_queue(status, priority, id)""")
 
+            conn_settings.execute("""CREATE TABLE IF NOT EXISTS ocr_channel_settings (
+                channel_id INTEGER PRIMARY KEY,
+                alliance_id INTEGER NOT NULL,
+                post_info_message INTEGER DEFAULT 1,
+                pin_info_message INTEGER DEFAULT 1,
+                info_message_id INTEGER,
+                auto_delete_screenshots INTEGER DEFAULT 1
+            )""")
+            try:
+                conn_settings.execute("SELECT auto_delete_screenshots FROM ocr_channel_settings LIMIT 1")
+            except sqlite3.OperationalError:
+                conn_settings.execute(
+                    "ALTER TABLE ocr_channel_settings ADD COLUMN auto_delete_screenshots INTEGER DEFAULT 1"
+                )
+            conn_settings.execute("""CREATE TABLE IF NOT EXISTS ocr_channel_event_keywords (
+                channel_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                keyword TEXT NOT NULL,
+                PRIMARY KEY (channel_id, event_type, keyword)
+            )""")
+            conn_settings.execute("""CREATE INDEX IF NOT EXISTS idx_ocr_keywords_channel
+                ON ocr_channel_event_keywords(channel_id)""")
+
+            # Explicit "event enabled on this channel" registry, decoupled
+            # from keywords so an admin can enable an event with zero keywords
+            # and let the fingerprint regex classify it on its own.
+            conn_settings.execute("""CREATE TABLE IF NOT EXISTS ocr_channel_enabled_events (
+                channel_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                PRIMARY KEY (channel_id, event_type)
+            )""")
+            conn_settings.execute("""CREATE INDEX IF NOT EXISTS idx_ocr_enabled_channel
+                ON ocr_channel_enabled_events(channel_id)""")
+            # One-time backfill: every (channel, event) that already has keywords
+            # is now also marked explicitly enabled. Idempotent.
+            conn_settings.execute("""INSERT OR IGNORE INTO ocr_channel_enabled_events
+                (channel_id, event_type)
+                SELECT DISTINCT channel_id, event_type FROM ocr_channel_event_keywords""")
+
             conn_settings.execute("""CREATE TABLE IF NOT EXISTS permission_audit_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 actor_id INTEGER NOT NULL,
@@ -1158,13 +1230,30 @@ if __name__ == "__main__":
 
         with connections["conn_users"] as conn_users:
             conn_users.execute("""CREATE TABLE IF NOT EXISTS users (
-                fid INTEGER PRIMARY KEY, 
-                nickname TEXT, 
-                furnace_lv INTEGER DEFAULT 0, 
-                kid INTEGER, 
-                stove_lv_content TEXT, 
+                fid INTEGER PRIMARY KEY,
+                nickname TEXT,
+                furnace_lv INTEGER DEFAULT 0,
+                kid INTEGER,
+                stove_lv_content TEXT,
                 alliance TEXT
             )""")
+            _users_columns_to_add = [
+                ("power",                   "INTEGER"),
+                ("power_updated_at",        "TEXT"),
+                ("combat_power",            "INTEGER"),
+                ("combat_power_updated_at", "TEXT"),
+                ("discord_id",              "INTEGER"),
+                ("discord_server_id",       "INTEGER"),
+                ("discord_id_updated_at",   "TEXT"),
+            ]
+            for _col, _typ in _users_columns_to_add:
+                try:
+                    conn_users.execute(f"SELECT {_col} FROM users LIMIT 1")
+                except sqlite3.OperationalError:
+                    conn_users.execute(f"ALTER TABLE users ADD COLUMN {_col} {_typ}")
+            conn_users.execute(
+                "CREATE INDEX IF NOT EXISTS idx_users_discord_id ON users(discord_id)"
+            )
 
         with connections["conn_giftcode"] as conn_giftcode:
             conn_giftcode.execute("""CREATE TABLE IF NOT EXISTS gift_codes (
@@ -1182,11 +1271,28 @@ if __name__ == "__main__":
 
         with connections["conn_alliance"] as conn_alliance:
             conn_alliance.execute("""CREATE TABLE IF NOT EXISTS alliancesettings (
-                alliance_id INTEGER PRIMARY KEY, 
-                channel_id INTEGER, 
+                alliance_id INTEGER PRIMARY KEY,
+                channel_id INTEGER,
                 interval INTEGER
             )""")
-            
+
+            # Per-alliance gate for who can upload screenshots in the
+            # Screenshot Upload channels (0 = anyone, 1 = bot admins only).
+            try:
+                conn_alliance.execute("SELECT ocr_upload_admin_only FROM alliancesettings LIMIT 1")
+            except sqlite3.OperationalError:
+                conn_alliance.execute(
+                    "ALTER TABLE alliancesettings ADD COLUMN ocr_upload_admin_only INTEGER DEFAULT 0"
+                )
+
+            # Per-alliance toggle for @silent sync posts (0 = ring, 1 = no notification ping).
+            try:
+                conn_alliance.execute("SELECT silent_notifications FROM alliancesettings LIMIT 1")
+            except sqlite3.OperationalError:
+                conn_alliance.execute(
+                    "ALTER TABLE alliancesettings ADD COLUMN silent_notifications INTEGER DEFAULT 0"
+                )
+
             conn_alliance.execute("""CREATE TABLE IF NOT EXISTS alliance_list (
                 alliance_id INTEGER PRIMARY KEY,
                 name TEXT,
@@ -1201,7 +1307,7 @@ if __name__ == "__main__":
     startup.phase_ok("Database ready")
 
     async def load_cogs():
-        cogs = ["pimp_my_bot", "process_queue", "onnx_lifecycle", "bot_main_menu", "alliance_sync", "alliance", "alliance_member_operations", "bot_operations", "alliance_logs", "bot_support", "bot_health", "gift_operations", "alliance_history", "alliance_w_command", "bot_startup", "notification_system", "notification_schedule", "alliance_id_channel", "alliance_channels", "bot_backup", "notification_editor", "notification_templates", "notification_wizard", "attendance", "attendance_report", "minister_schedule", "minister_menu", "minister_archive", "alliance_registration", "bear_track"]
+        cogs = ["pimp_my_bot", "process_queue", "onnx_lifecycle", "bot_main_menu", "alliance_sync", "alliance", "alliance_member_operations", "bot_operations", "alliance_logs", "bot_support", "bot_health", "gift_operations", "alliance_history", "alliance_w_command", "bot_startup", "notification_system", "notification_schedule", "alliance_id_channel", "alliance_channels", "bot_backup", "notification_editor", "notification_templates", "notification_wizard", "attendance", "attendance_report", "attendance_ocr", "minister_schedule", "minister_menu", "minister_archive", "alliance_registration", "bear_track"]
 
         failed_cogs = []
 
