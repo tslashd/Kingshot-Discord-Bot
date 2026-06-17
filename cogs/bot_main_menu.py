@@ -308,12 +308,14 @@ class MainMenu(commands.Cog):
                     f"└ View, add, transfer, export and remove members\n\n"
                     f"{theme.announceIcon} **Channel Setup**\n"
                     f"└ Configure alliance channels: ID, Sync, Log\n\n"
-                    f"{theme.refreshIcon} **Sync Settings**\n"
-                    f"└ Sync interval, start time and other options\n\n"
+                    f"{theme.settingsIcon} **Settings**\n"
+                    f"└ Sync interval, auto-removal on transfer, notifications, logs\n\n"
                     f"{theme.editListIcon} **Edit Name**\n"
                     f"└ Rename this alliance\n\n"
                     f"{theme.listIcon} **History**\n"
                     f"└ Town Center level and nickname change history per member\n\n"
+                    f"{theme.chartIcon} **Power Rankings**\n"
+                    f"└ Members ranked by power, with combat power and attendance\n\n"
                     f"{theme.trashIcon} **Delete Alliance**\n"
                     f"└ Permanently remove this alliance and all related data\n"
                     f"{theme.lowerDivider}"
@@ -363,6 +365,11 @@ class MainMenu(commands.Cog):
                 )
                 return
             view = AdminManagerView(self, interaction.user.id)
+            # refresh_data resolves each admin's name, fetch_user'ing any not in
+            # cache — slow on a cold cache (e.g. just after restart) and can blow
+            # the 3s ack window. Defer first so the later edit can't 404 (10062).
+            if not interaction.response.is_done():
+                await interaction.response.defer()
             await view.refresh_data(self.bot)
             embed = view.build_embed()
             await safe_edit_message(interaction, embed=embed, view=view, content=None)
@@ -387,6 +394,8 @@ class MainMenu(commands.Cog):
                     f"└ Create / view / clean local + DM backups (Global Admin only)\n\n"
                     f"{theme.heartIcon} **Bot Health**\n"
                     f"└ API status, DB health, system info, restart, cleanup tools (Global Admin only)\n\n"
+                    f"{theme.robotIcon} **Bot Presence**\n"
+                    f"└ Set the bot's Discord activity status (Global Admin only)\n\n"
                     f"{theme.supportIcon} **Request Support**\n"
                     f"└ Open a support DM with logs attached\n\n"
                     f"{theme.infoIcon} **About Project**\n"
@@ -780,11 +789,12 @@ class AllianceManagementEntryView(discord.ui.View):
 
 
 class AllianceHubView(discord.ui.View):
-    """Per-alliance hub. Lean layout:
+    """Per-alliance hub. Layout:
       row 0: alliance switch dropdown
-      row 1: Manage Members | History
-      row 2: Channel Setup | Sync Settings | Edit Name
-      row 3: Back | Delete Alliance
+      row 1: Manage Members | Channel Setup
+      row 2: Settings | Edit Name
+      row 3: History | Power Rankings
+      row 4: Back | Delete Alliance
     """
 
     def __init__(self, cog, alliance_id: int, alliance_name: str,
@@ -853,7 +863,7 @@ class AllianceHubView(discord.ui.View):
 
     # ── Secondary actions (row 2) ──
 
-    @discord.ui.button(label="Sync Settings", emoji=theme.refreshIcon,
+    @discord.ui.button(label="Settings", emoji=theme.settingsIcon,
                        style=discord.ButtonStyle.primary, row=2)
     async def sync_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
         await _route_to_cog(
@@ -874,7 +884,7 @@ class AllianceHubView(discord.ui.View):
         )
 
     @discord.ui.button(label="History", emoji=theme.listIcon,
-                       style=discord.ButtonStyle.secondary, row=2)
+                       style=discord.ButtonStyle.secondary, row=3)
     async def history(self, interaction: discord.Interaction, button: discord.ui.Button):
         await _route_to_cog(
             interaction, self.cog.bot, "AllianceHistory",
@@ -883,15 +893,24 @@ class AllianceHubView(discord.ui.View):
             missing_label="Alliance History",
         )
 
-    # ── Nav (row 3) ──
+    @discord.ui.button(label="Power Rankings", emoji=theme.chartIcon,
+                       style=discord.ButtonStyle.secondary, row=3)
+    async def power_rankings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _route_to_cog(
+            interaction, self.cog.bot, "AllianceMemberOperations",
+            "show_power_rankings_for", self.alliance_id,
+            missing_label="Alliance Members",
+        )
+
+    # ── Nav (row 4) ──
 
     @discord.ui.button(label="Back", emoji=theme.backIcon,
-                       style=discord.ButtonStyle.secondary, row=3)
+                       style=discord.ButtonStyle.secondary, row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_alliance_management(interaction)
 
     @discord.ui.button(label="Delete Alliance", emoji=theme.trashIcon,
-                       style=discord.ButtonStyle.danger, row=3)
+                       style=discord.ButtonStyle.danger, row=4)
     async def delete_alliance(self, interaction: discord.Interaction, button: discord.ui.Button):
         await _route_to_cog(
             interaction, self.cog.bot, "Alliance",
@@ -2056,7 +2075,7 @@ class MaintenanceView(discord.ui.View):
         # Disable Global Admin only buttons for non-global admins
         for child in self.children:
             if isinstance(child, discord.ui.Button):
-                if child.label in ["Check for Updates", "Backup System", "Bot Health"]:
+                if child.label in ["Check for Updates", "Backup System", "Bot Health", "Bot Presence"]:
                     child.disabled = not is_global
 
     @discord.ui.button(
@@ -2111,6 +2130,27 @@ class MaintenanceView(discord.ui.View):
         except Exception as e:
             logger.error(f"Error loading Bot Health: {e}")
             print(f"Error loading Bot Health: {e}")
+
+    @discord.ui.button(
+        label="Bot Presence",
+        emoji=theme.robotIcon,
+        style=discord.ButtonStyle.primary,
+        custom_id="bot_presence",
+        row=1
+    )
+    async def presence_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            bot_ops = self.cog.bot.get_cog("BotOperations")
+            if bot_ops:
+                await bot_ops.show_bot_presence(interaction)
+            else:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Bot Operations module not found.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            logger.error(f"Error loading Bot Presence: {e}")
+            print(f"Error loading Bot Presence: {e}")
 
     @discord.ui.button(
         label="Request Support",

@@ -1277,12 +1277,6 @@ async def periodic_validation_loop_body(cog):
                     else:
                         cog.logger.info(f"GiftOps: Code '{giftcode}' returned status '{status}' during periodic validation.")
 
-                        # Extra delay for CAPTCHA_TOO_FREQUENT errors
-                        if status == "CAPTCHA_TOO_FREQUENT":
-                            cog.logger.info(f"GiftOps: Encountered CAPTCHA_TOO_FREQUENT, waiting 60-90 seconds before next validation")
-                            await asyncio.sleep(random.uniform(60.0, 90.0))
-                            continue
-
                     # Wait between validations to avoid rate limiting
                     await asyncio.sleep(random.uniform(30.0, 60.0))
 
@@ -1527,9 +1521,6 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode):
                         "TIMEOUT_RETRY": f"{theme.timeIcon} **" + "{count}" + "** members were staring into the void, until the void finally timed out on them.",
                         "LOGIN_EXPIRED_MID_PROCESS": f"{theme.lockIcon} **" + "{count}" + "** members login failed mid-process. How'd that even happen?",
                         "LOGIN_FAILED": f"{theme.lockIcon} **" + "{count}" + "** members failed due to login issues. Try logging it off and on again!",
-                        "CAPTCHA_SOLVING_FAILED": f"{theme.robotIcon} **" + "{count}" + "** members lost the battle against CAPTCHA. You sure those weren't just bots?",
-                        "CAPTCHA_SOLVER_ERROR": f"{theme.settingsIcon} **" + "{count}" + "** members failed due to a CAPTCHA solver issue. We're still trying to solve that one.",
-                        "OCR_DISABLED": f"{theme.deniedIcon} **" + "{count}" + "** members failed since OCR is disabled. Try turning it on first!",
                         "SIGN_ERROR": f"{theme.lockIcon} **" + "{count}" + "** members failed due to a signature error. Something went wrong.",
                         "ERROR": f"{theme.deniedIcon} **" + "{count}" + "** members failed due to a general error. Might want to check the logs.",
                         "UNKNOWN_API_RESPONSE": f"{theme.infoIcon} **" + "{count}" + "** members failed with an unknown API response. Say what?",
@@ -1697,16 +1688,6 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode):
                 already_used_users.append(nickname)
                 batch_results.append((fid, giftcode, response_status))
                 mark_processed = True
-            elif response_status == "OCR_DISABLED":
-                add_to_failed = True
-                mark_processed = True
-                fail_reason = "OCR Disabled"
-                error_summary["OCR_DISABLED"] = error_summary.get("OCR_DISABLED", 0) + 1
-            elif response_status in ["SOLVER_ERROR", "CAPTCHA_FETCH_ERROR"]:
-                add_to_failed = True
-                mark_processed = True
-                fail_reason = f"Solver Error ({response_status})"
-                error_summary["CAPTCHA_SOLVER_ERROR"] = error_summary.get("CAPTCHA_SOLVER_ERROR", 0) + 1
             elif response_status in ["LOGIN_FAILED", "LOGIN_EXPIRED_MID_PROCESS", "ERROR", "UNKNOWN_API_RESPONSE"]:
                 add_to_failed = True
                 mark_processed = True

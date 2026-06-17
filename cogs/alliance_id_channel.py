@@ -351,7 +351,7 @@ class AllianceIDChannel(commands.Cog):
                         f"**{theme.userIcon} Name:** `{nickname}`\n"
                         f"**{theme.fidIcon} ID:** `{fid}`\n"
                         f"**{theme.levelIcon} Town Center Level:** `{furnace_level_name}`\n"
-                        f"**{theme.globeIcon} State:** `{kid}`\n"
+                        f"**{theme.globeIcon} Kingdom:** `{kid}`\n"
                         f"{theme.lowerDivider}"
                     ),
                     color=theme.emColor3
