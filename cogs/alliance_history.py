@@ -206,19 +206,6 @@ class _PostToChannelPickerView(discord.ui.View):
 class AllianceHistory(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.conn_settings = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
-        self.c_settings = self.conn_settings.cursor()
-        self.conn = sqlite3.connect('db/changes.sqlite', timeout=30.0, check_same_thread=False)
-        self.cursor = self.conn.cursor()
-
-        # Enable WAL mode for better concurrent access
-        self.conn_settings.execute("PRAGMA journal_mode=WAL")
-        self.conn_settings.execute("PRAGMA synchronous=NORMAL")
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA synchronous=NORMAL")
-
-        self._create_tables()
-        
         self.level_mapping = {
             31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
             35: "TC 1", 36: "TC 1-1", 37: "TC 1-2", 38: "TC 1-3", 39: "TC 1-4",
@@ -232,24 +219,6 @@ class AllianceHistory(commands.Cog):
             75: "TC 9", 76: "TC 9-1", 77: "TC 9-2", 78: "TC 9-3", 79: "TC 9-4",
             80: "TC 10", 81: "TC 10-1", 82: "TC 10-2", 83: "TC 10-3", 84: "TC 10-4"
         }
-
-    def _create_tables(self):
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS furnace_changes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                fid INTEGER,
-                old_value INTEGER,
-                new_value INTEGER,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        self.conn.commit()
-
-    async def cog_unload(self):
-        if hasattr(self, 'cursor'):
-            self.cursor.close()
-        if hasattr(self, 'conn'):
-            self.conn.close()
 
     async def show_alliance_history_menu(self, interaction: discord.Interaction):
         try:
@@ -277,14 +246,15 @@ class AllianceHistory(commands.Cog):
 
     async def show_furnace_history(self, interaction: discord.Interaction, fid: int):
         try:
-            self.cursor.execute("""
-                SELECT old_furnace_lv, new_furnace_lv, change_date
-                FROM furnace_changes
-                WHERE fid = ?
-                ORDER BY change_date DESC
-            """, (fid,))
-
-            changes = self.cursor.fetchall()
+            with sqlite3.connect('db/changes.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT old_furnace_lv, new_furnace_lv, change_date
+                    FROM furnace_changes
+                    WHERE fid = ?
+                    ORDER BY change_date DESC
+                """, (fid,))
+                changes = cursor.fetchall()
 
             if not changes:
                 await interaction.followup.send(
@@ -340,15 +310,16 @@ class AllianceHistory(commands.Cog):
 
     async def show_nickname_history(self, interaction: discord.Interaction, fid: int):
         try:
-            self.cursor.execute("""
-                SELECT old_nickname, new_nickname, change_date 
-                FROM nickname_changes 
-                WHERE fid = ? 
-                ORDER BY change_date DESC
-            """, (fid,))
-            
-            changes = self.cursor.fetchall()
-            
+            with sqlite3.connect('db/changes.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT old_nickname, new_nickname, change_date
+                    FROM nickname_changes
+                    WHERE fid = ?
+                    ORDER BY change_date DESC
+                """, (fid,))
+                changes = cursor.fetchall()
+
             if not changes:
                 await interaction.followup.send(
                     "No nickname changes found for this player.",
@@ -556,15 +527,16 @@ class AllianceHistory(commands.Cog):
                 """, (alliance_id,))
                 members = {fid: name for fid, name in cursor.fetchall()}
 
-            self.cursor.execute("""
-                SELECT fid, old_furnace_lv, new_furnace_lv, change_date 
-                FROM furnace_changes 
-                WHERE fid IN ({})
-                AND change_date >= datetime('now', '-{} hours')
-                ORDER BY change_date DESC
-            """.format(','.join('?' * len(members)), hours), tuple(members.keys()))
-            
-            changes = self.cursor.fetchall()
+            with sqlite3.connect('db/changes.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT fid, old_furnace_lv, new_furnace_lv, change_date
+                    FROM furnace_changes
+                    WHERE fid IN ({})
+                    AND change_date >= datetime('now', '-{} hours')
+                    ORDER BY change_date DESC
+                """.format(','.join('?' * len(members)), hours), tuple(members.keys()))
+                changes = cursor.fetchall()
 
             if not changes:
                 await interaction.followup.send(
@@ -612,15 +584,16 @@ class AllianceHistory(commands.Cog):
                 """, (alliance_id,))
                 members = {fid: name for fid, name in cursor.fetchall()}
 
-            self.cursor.execute("""
-                SELECT fid, old_nickname, new_nickname, change_date 
-                FROM nickname_changes 
-                WHERE fid IN ({})
-                AND change_date >= datetime('now', '-{} hours')
-                ORDER BY change_date DESC
-            """.format(','.join('?' * len(members)), hours), tuple(members.keys()))
-            
-            changes = self.cursor.fetchall()
+            with sqlite3.connect('db/changes.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT fid, old_nickname, new_nickname, change_date
+                    FROM nickname_changes
+                    WHERE fid IN ({})
+                    AND change_date >= datetime('now', '-{} hours')
+                    ORDER BY change_date DESC
+                """.format(','.join('?' * len(members)), hours), tuple(members.keys()))
+                changes = cursor.fetchall()
 
             if not changes:
                 await interaction.followup.send(
