@@ -157,6 +157,16 @@ class AttendanceOCR(commands.Cog):
         if not images:
             return
 
+        # Keyword gate (mirrors bear_track): if set, only process uploads whose
+        # message text contains a keyword. Blank = process every upload.
+        channel_keywords = [
+            kw for kws in get_channel_keywords(message.channel.id).values() for kw in kws
+        ]
+        if channel_keywords:
+            content_lower = message.content.lower()
+            if not any(kw.lower() in content_lower for kw in channel_keywords):
+                return
+
         # Per-alliance permission gate. When restricted, only bot admins
         # can post screenshots for processing; others get a self-deleting notice.
         if get_ocr_upload_admin_only(settings["alliance_id"]):
@@ -275,7 +285,6 @@ class AttendanceOCR(commands.Cog):
         image's read, kept for logging a miss."""
         from . import bear_track
         enabled = get_enabled_events(channel_id)
-        keywords = get_channel_keywords(channel_id)
         first_text = ""
         for attachment in images:
             try:
@@ -286,9 +295,7 @@ class AttendanceOCR(commands.Cog):
                 continue
             if not first_text:
                 first_text = text
-            classification = classify_event(
-                text, enabled_events=enabled, keywords_by_event=keywords,
-            )
+            classification = classify_event(text, enabled_events=enabled)
             if classification:
                 return classification, text
         return None, first_text
