@@ -2575,8 +2575,12 @@ class AllianceMemberOperations(commands.Cog):
                             with open(log_file_path, 'a', encoding='utf-8') as log_file:
                                 log_file.write(f"REJECTED: ID {fid} — {kingdom_error}\n")
                             error_count += 1
-                            if fid not in error_users:
-                                error_users.append(fid)
+                            # Surface the nickname alongside the fid in the failure
+                            # field — for kingdom rejections we always have it from
+                            # the API; fall back to bare fid if it's somehow missing.
+                            display = f"{nickname} ({fid})" if nickname else str(fid)
+                            if display not in error_users and fid not in error_users:
+                                error_users.append(display)
                             embed.set_field_at(
                                 1,
                                 name=f"{theme.deniedIcon} Failed ({error_count}/{total_users})",
