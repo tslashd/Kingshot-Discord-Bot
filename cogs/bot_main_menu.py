@@ -250,7 +250,7 @@ class MainMenu(commands.Cog):
             with sqlite3.connect('db/alliance.sqlite') as db:
                 cursor = db.cursor()
                 cursor.execute(
-                    "SELECT name FROM alliance_list WHERE alliance_id = ?",
+                    "SELECT name, kid FROM alliance_list WHERE alliance_id = ?",
                     (alliance_id,),
                 )
                 row = cursor.fetchone()
@@ -260,7 +260,7 @@ class MainMenu(commands.Cog):
                     ephemeral=True,
                 )
                 return
-            alliance_name = row[0]
+            alliance_name, alliance_kid = row[0], row[1]
 
             with sqlite3.connect('db/users.sqlite') as db:
                 cursor = db.cursor()
@@ -282,6 +282,16 @@ class MainMenu(commands.Cog):
             else:
                 stats_line = "_No members yet — use **Add Members** to get started_"
 
+            if alliance_kid is None:
+                kingdom_line = (
+                    f"{theme.globeIcon} **Kingdom:** _not locked_ "
+                    f"(players from any kingdom can be added)"
+                )
+            else:
+                kingdom_line = (
+                    f"{theme.globeIcon} **Kingdom:** locked to `#{alliance_kid}`"
+                )
+
             tier = PermissionManager.get_tier(interaction.user.id)
             accessible, _ = PermissionManager.get_admin_alliances(
                 interaction.user.id, interaction.guild_id
@@ -299,7 +309,8 @@ class MainMenu(commands.Cog):
             embed = discord.Embed(
                 title=f"{theme.allianceIcon} {alliance_name}",
                 description=(
-                    f"{theme.membersIcon} {stats_line}\n\n"
+                    f"{theme.membersIcon} {stats_line}\n"
+                    f"{kingdom_line}\n\n"
                     f"Pick an action below, or use the dropdown to switch "
                     f"to a different alliance.\n\n"
                     f"**Actions**\n"
@@ -312,6 +323,8 @@ class MainMenu(commands.Cog):
                     f"└ Sync interval, auto-removal on transfer, notifications, logs\n\n"
                     f"{theme.editListIcon} **Edit Name**\n"
                     f"└ Rename this alliance\n\n"
+                    f"{theme.globeIcon} **Set Kingdom**\n"
+                    f"└ Lock this alliance to one Kingdom (rejects mismatched adds)\n\n"
                     f"{theme.listIcon} **History**\n"
                     f"└ Town Center level and nickname change history per member\n\n"
                     f"{theme.chartIcon} **Power Rankings**\n"
@@ -792,7 +805,7 @@ class AllianceHubView(discord.ui.View):
     """Per-alliance hub. Layout:
       row 0: alliance switch dropdown
       row 1: Manage Members | Channel Setup
-      row 2: Settings | Edit Name
+      row 2: Settings | Edit Name | Set Kingdom
       row 3: History | Power Rankings
       row 4: Back | Delete Alliance
     """
@@ -879,6 +892,16 @@ class AllianceHubView(discord.ui.View):
         await _route_to_cog(
             interaction, self.cog.bot, "Alliance",
             "show_edit_name_for", self.alliance_id,
+            fallback_method="show_alliance_operations",
+            missing_label="Alliance",
+        )
+
+    @discord.ui.button(label="Set Kingdom", emoji=theme.globeIcon,
+                       style=discord.ButtonStyle.primary, row=2)
+    async def set_kingdom(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _route_to_cog(
+            interaction, self.cog.bot, "Alliance",
+            "show_edit_kingdom_for", self.alliance_id,
             fallback_method="show_alliance_operations",
             missing_label="Alliance",
         )

@@ -14,6 +14,48 @@ from .process_queue import ALLIANCE_CONTROL
 logger = logging.getLogger('alliance')
 
 
+def check_alliance_kingdom(alliance_id: int, player_kid) -> "str | None":
+    """Gate a player-add against the alliance's locked kingdom.
+
+    Returns None when the add is allowed; returns a human-readable reason string
+    when it should be denied. Callers wrap the string with their own icon/embed
+    pattern (typically ``f"{theme.deniedIcon} {reason}"``).
+
+    NULL ``alliance_list.kid`` is treated as "no restriction" so existing installs
+    are unaffected until an admin opts in by setting a kingdom on the alliance.
+    A NULL player kid (API didn't return one) fails closed when the alliance is
+    locked — we can't prove the player belongs.
+    """
+    try:
+        with sqlite3.connect("db/alliance.sqlite", timeout=30.0) as conn:
+            row = conn.execute(
+                "SELECT kid FROM alliance_list WHERE alliance_id = ?", (alliance_id,)
+            ).fetchone()
+    except sqlite3.OperationalError:
+        # Pre-migration DB or transient lock; fail open to preserve legacy behaviour.
+        return None
+    alliance_kid = row[0] if row else None
+    if alliance_kid is None:
+        return None
+    if player_kid is None:
+        return (
+            f"Player has no kingdom number from the API; "
+            f"this alliance is locked to Kingdom #{alliance_kid}."
+        )
+    try:
+        if int(player_kid) == int(alliance_kid):
+            return None
+    except (TypeError, ValueError):
+        return (
+            f"Could not read the player's kingdom number; "
+            f"this alliance is locked to Kingdom #{alliance_kid}."
+        )
+    return (
+        f"Player is in Kingdom #{player_kid}, "
+        f"but this alliance is locked to Kingdom #{alliance_kid}."
+    )
+
+
 def _alliance_sync_in_flight(process_queue, alliance_id: int) -> bool:
     """True if any sync work for this alliance is queued or running.
 
@@ -42,7 +84,8 @@ class Alliance(commands.Cog):
                 CREATE TABLE IF NOT EXISTS alliance_list (
                     alliance_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT UNIQUE NOT NULL,
-                    discord_server_id INTEGER
+                    discord_server_id INTEGER,
+                    kid INTEGER
                 )
             """)
             conn.commit()
@@ -54,6 +97,10 @@ class Alliance(commands.Cog):
             columns = [info[1] for info in cursor.fetchall()]
             if "discord_server_id" not in columns:
                 cursor.execute("ALTER TABLE alliance_list ADD COLUMN discord_server_id INTEGER")
+                conn.commit()
+            # Per-alliance kingdom lock. NULL = no restriction (legacy behaviour).
+            if "kid" not in columns:
+                cursor.execute("ALTER TABLE alliance_list ADD COLUMN kid INTEGER")
                 conn.commit()
 
     async def cog_unload(self):
@@ -456,6 +503,25 @@ class Alliance(commands.Cog):
             return
         await interaction.response.send_modal(
             EditNameModal(alliance_id, row[0], self.conn)
+        )
+
+    async def show_edit_kingdom_for(self, interaction: discord.Interaction, alliance_id: int):
+        """Open the per-alliance Kingdom modal. Empty stores NULL (no lock)."""
+        with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name, kid FROM alliance_list WHERE alliance_id = ?",
+                (alliance_id,),
+            )
+            row = cursor.fetchone()
+        if not row:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Alliance not found.", ephemeral=True
+            )
+            return
+        alliance_name, current_kid = row
+        await interaction.response.send_modal(
+            EditKingdomModal(alliance_id, alliance_name, current_kid, self.conn)
         )
 
     async def show_edit_alliance_for(self, interaction: discord.Interaction, alliance_id: int):
@@ -1519,8 +1585,10 @@ class AllianceModal(discord.ui.Modal):
 
 
 class AddAllianceModal(discord.ui.Modal):
-    """Single-field alliance creator. Inserts a new alliance with safe defaults
-    (interval=60min, no channel, no start time). Channels and sync settings are
+    """Two-field alliance creator. Inserts a new alliance with safe defaults
+    (interval=60min, no channel, no start time). The optional Kingdom (#) field
+    locks the alliance to a single kingdom so non-matching players are rejected
+    on add — leave blank for no restriction. Channels and sync settings are
     configured post-creation via Channel Setup / Sync Settings."""
 
     DEFAULT_INTERVAL_MINUTES = 60
@@ -1535,6 +1603,13 @@ class AddAllianceModal(discord.ui.Modal):
             max_length=50,
         )
         self.add_item(self.name_input)
+        self.kid_input = discord.ui.TextInput(
+            label="Kingdom # (optional)",
+            placeholder="Leave blank for no kingdom restriction",
+            required=False,
+            max_length=10,
+        )
+        self.add_item(self.kid_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         alliance_name = self.name_input.value.strip()
@@ -1543,6 +1618,21 @@ class AddAllianceModal(discord.ui.Modal):
                 f"{theme.deniedIcon} Alliance name cannot be empty.", ephemeral=True
             )
             return
+
+        kid_raw = (self.kid_input.value or "").strip()
+        parsed_kid = None
+        if kid_raw:
+            try:
+                parsed_kid = int(kid_raw)
+                if parsed_kid <= 0:
+                    raise ValueError
+            except ValueError:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Kingdom must be a positive whole number "
+                    f"(or leave blank for no restriction).",
+                    ephemeral=True,
+                )
+                return
 
         try:
             with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
@@ -1558,8 +1648,11 @@ class AddAllianceModal(discord.ui.Modal):
                     return
 
                 cursor.execute(
-                    "INSERT INTO alliance_list (name, discord_server_id) VALUES (?, ?)",
-                    (alliance_name, interaction.guild.id if interaction.guild else None),
+                    "INSERT INTO alliance_list (name, discord_server_id, kid) "
+                    "VALUES (?, ?, ?)",
+                    (alliance_name,
+                     interaction.guild.id if interaction.guild else None,
+                     parsed_kid),
                 )
                 alliance_id = cursor.lastrowid
                 cursor.execute(
@@ -1651,6 +1744,77 @@ class EditNameModal(discord.ui.Modal):
                 )
             except Exception:
                 pass
+
+class EditKingdomModal(discord.ui.Modal):
+    """Single-field editor for an alliance's locked Kingdom. Empty input clears
+    the lock (sets kid to NULL); a positive integer locks the alliance to that
+    kingdom so non-matching players are rejected at add-time."""
+
+    def __init__(self, alliance_id: int, alliance_name: str,
+                 current_kid, conn):
+        super().__init__(title="Set Alliance Kingdom")
+        self.alliance_id = alliance_id
+        self.alliance_name = alliance_name
+        self.conn = conn
+        self.kid_input = discord.ui.TextInput(
+            label="Kingdom # (blank = no lock)",
+            placeholder="Leave blank to clear the kingdom restriction",
+            default=("" if current_kid is None else str(current_kid)),
+            required=False,
+            max_length=10,
+        )
+        self.add_item(self.kid_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = (self.kid_input.value or "").strip()
+        new_kid = None
+        if raw:
+            try:
+                new_kid = int(raw)
+                if new_kid <= 0:
+                    raise ValueError
+            except ValueError:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Kingdom must be a positive whole number "
+                    f"(or leave blank to clear).",
+                    ephemeral=True,
+                )
+                return
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "UPDATE alliance_list SET kid = ? WHERE alliance_id = ?",
+                (new_kid, self.alliance_id),
+            )
+            self.conn.commit()
+
+            if new_kid is None:
+                desc = (
+                    f"{theme.allianceIcon} **{self.alliance_name}**\n"
+                    f"Kingdom lock **cleared** — players from any kingdom can now be added."
+                )
+            else:
+                desc = (
+                    f"{theme.allianceIcon} **{self.alliance_name}**\n"
+                    f"Locked to **Kingdom #{new_kid}** — only players in this kingdom "
+                    f"can be added going forward."
+                )
+            embed = discord.Embed(
+                title=f"{theme.verifiedIcon} Kingdom Updated",
+                description=desc,
+                color=theme.emColor3,
+            )
+            await interaction.response.edit_message(embed=embed, view=None)
+        except Exception as e:
+            logger.error(f"Error setting kingdom on alliance {self.alliance_id}: {e}")
+            print(f"Error setting kingdom on alliance {self.alliance_id}: {e}")
+            try:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Failed to update kingdom.", ephemeral=True
+                )
+            except Exception:
+                pass
+
 
 class PaginatedDeleteView(discord.ui.View):
     def __init__(self, pages, original_callback):

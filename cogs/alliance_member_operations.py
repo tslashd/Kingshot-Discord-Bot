@@ -17,6 +17,7 @@ from .login_handler import LoginHandler
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, safe_edit_message, disable_expired_view
 from .process_queue import MEMBER_ADD, PreemptedException
+from .alliance import check_alliance_kingdom
 
 logger = logging.getLogger('alliance')
 
@@ -2568,6 +2569,24 @@ class AllianceMemberOperations(commands.Cog):
                         furnace_lv = data.get('stove_lv', 0)
                         stove_lv_content = data.get('stove_lv_content', None)
                         kid = data.get('kid', None)
+
+                        kingdom_error = check_alliance_kingdom(alliance_id, kid)
+                        if kingdom_error:
+                            with open(log_file_path, 'a', encoding='utf-8') as log_file:
+                                log_file.write(f"REJECTED: ID {fid} — {kingdom_error}\n")
+                            error_count += 1
+                            if fid not in error_users:
+                                error_users.append(fid)
+                            embed.set_field_at(
+                                1,
+                                name=f"{theme.deniedIcon} Failed ({error_count}/{total_users})",
+                                value="Error list cannot be displayed due to exceeding 70 users" if len(error_users) > 70
+                                else ", ".join(error_users) or "-",
+                                inline=False
+                            )
+                            await progress.edit(embed)
+                            index += 1
+                            continue
 
                         if nickname:
                             try: # Since we pre-filtered, this ID should not exist in database

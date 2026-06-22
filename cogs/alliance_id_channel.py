@@ -13,6 +13,7 @@ from discord.ext import tasks
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, safe_edit_message
 from .login_handler import LoginHandler
+from .alliance import check_alliance_kingdom
 
 logger = logging.getLogger('alliance')
 
@@ -336,6 +337,15 @@ class AllianceIDChannel(commands.Cog):
                 stove_lv_content = result['data'].get('stove_lv_content', None)
                 kid = result['data'].get('kid', None)
                 avatar_image = result['data'].get('avatar_image', None)
+
+                kingdom_error = check_alliance_kingdom(alliance_id, kid)
+                if kingdom_error:
+                    await message.add_reaction(theme.deniedIcon)
+                    await message.reply(
+                        f"{theme.deniedIcon} {kingdom_error}",
+                        delete_after=delete_after,
+                    )
+                    return
 
                 try:
                     with sqlite3.connect('db/users.sqlite') as users_db:
