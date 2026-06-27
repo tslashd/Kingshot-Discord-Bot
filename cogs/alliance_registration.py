@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, timezone
 from .pimp_my_bot import theme
 from .login_handler import LoginHandler
+from .alliance import check_alliance_kingdom
 
 logger = logging.getLogger('alliance')
 
@@ -250,6 +251,14 @@ class AllianceRegistration(commands.Cog):
                     f"{theme.deniedIcon} Failed to fetch user data. Please try again later.",
                     ephemeral=True,
                 )
+            return
+
+        kingdom_error = check_alliance_kingdom(alliance, user_data.get("kid"))
+        if kingdom_error:
+            await interaction.followup.send(
+                f"{theme.deniedIcon} {kingdom_error}",
+                ephemeral=True,
+            )
             return
 
         self._insert_new_user(fid, user_data, alliance, caller_id, current_server_id)
